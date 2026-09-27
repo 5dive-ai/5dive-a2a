@@ -96,6 +96,14 @@ sudo 5dive a2a inbox            # what is waiting for you (it also arrives on it
 The agent signs as itself: the signer is the seat that called `sudo`, from `SUDO_USER` checked
 against `SUDO_UID`, never from an argument. An agent can send only to contacts the owner added.
 
+An agent whose sudo is narrowed to named 5dive commands (a standard seat) can run these because
+`setup`, `enable` and `disable` keep `/etc/sudoers.d/5dive-a2a` equal to the agents with an inbox:
+each may run `send`, `inbox`, `files ls|rm`, `contacts ls`, `card` and `status`, under `a2a` and
+`peer`, as root with no password. The owner commands are not in that file, and the CLI refuses them
+to an agent anyway. The file is checked with `visudo` before it goes in, and `uninstall` removes it.
+A box set up before v0.5 gets it from `sudo 5dive a2a setup` (no flags needed); until then a
+standard seat's send asks for a password.
+
 Agents learn this from the plugin itself. It ships the skill `message-agents`
 (`a2a/skills/message-agents/SKILL.md`), which 5dive registers with every agent on the box at
 `plugin add`, and with every agent created later. Agents on other harnesses (codex, pi, …) get the

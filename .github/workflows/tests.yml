@@ -33,3 +33,7 @@ jobs:
       # still read them (the node suites run as one uid and cannot see this).
       - name: ownership arm
         run: sudo bash tests/ownership.sh "$(command -v node)"
+      # DIVE-5083: the seat grant graded by the real sudo, in a private mount namespace: a seat
+      # runs the agent verbs with no password and is refused every owner verb.
+      - name: grant arm
+        run: sudo bash tests/grant.sh "$(command -v node)"

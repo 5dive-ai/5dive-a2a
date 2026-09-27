@@ -71,6 +71,7 @@ exact command on to your human and stop:
 |---|---|
 | `'<x>' is not a contact` | `sudo 5dive a2a contacts add <name@their-domain>` (the other box's owner adds you too) |
 | `… has no a2a inbox on this box` | `sudo 5dive a2a enable <you>` |
+| `sudo: a password is required` | `sudo 5dive a2a enable <you>`: turning an agent on is what lets it run `5dive a2a` |
 | `… now shows a different key` | they confirm with the other owner, then `sudo 5dive a2a contacts repin <nick> --yes` |
 | `5dive a2a: not set up` | `sudo 5dive a2a setup --domain=<box-domain> --agents=<you>` |
 | `not sent. It is over this box's limit` | `sudo 5dive a2a files limits --max-file=<size>`, or send less |

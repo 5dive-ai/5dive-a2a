@@ -4,7 +4,8 @@
 //   owner  = root with no agent seat behind the sudo, or root called from the owner's dashboard or
 //            a login session (ownerSurface): setup, enable, contacts, allow, uninstall
 //   seat   = an agent calling `sudo 5dive a2a send|inbox`; it signs as ITSELF, taken from
-//            SUDO_USER (cross-checked against SUDO_UID), never from an argument
+//            SUDO_USER (cross-checked against SUDO_UID), never from an argument. A narrowed
+//            seat may run exactly those verbs through /etc/sudoers.d/5dive-a2a (syncSeatGrant)
 //   inbox  = the unprivileged 5dive-a2a service: verifies and stores, holds no key
 //   _tick  = the root timer: hands waiting messages to `5dive agent send`, and nothing else
 // A root-all seat can step around any of this (it has root). On such a seat "the agent never
@@ -222,6 +223,63 @@ function enableAgent(p, config, agent) {
   did = verifyCard(card).did;
   config.agents[agent] = { inbox: true, did };
   return did;
+}
+
+// ---- the seats' sudo grant (DIVE-5083) -------------------------------------------------
+
+// A standard seat's sudo is a list of exact 5dive commands, and none of them was ours: the seat
+// could receive (the root timer hands it messages) but `sudo 5dive a2a send` asked it for a
+// password, so it could not answer. Every seat with an inbox gets the SEAT verbs, as root, with
+// no password; the owner verbs are not in the list at all, and requireOwner refuses them anyway
+// (SUDO_USER is the seat, and an agent's own unit is never an owner surface).
+// Both names: `peer` works on every 5dive CLI. On a CLI older than the a2a rename, `a2a` is the
+// core round-ledger verb, whose only subcommand is `rounds`, so these lines reach nothing there.
+// Only trailing-`*` forms, the one wildcard shape sudo-rs accepts (as the 5dive CLI's own grants).
+export const SUDOERS_FILE = "/etc/sudoers.d/5dive-a2a";
+const FIVEDIVE_BIN = "/usr/local/bin/5dive";
+export const SEAT_COMMANDS = [
+  "send *", "inbox", "inbox *", "files", "files ls", "files ls *", "files rm *",
+  "contacts", "contacts ls", "contacts ls *", "card", "card *", "status", "status *",
+];
+
+// The unix account an agent runs as (agentForUser, the other way round).
+export const seatUser = (agent) => (agent === "claude" ? "claude" : `agent-${agent}`);
+
+export function sudoersText(users, bin = FIVEDIVE_BIN) {
+  const cmds = ["peer", "a2a"].flatMap((v) => SEAT_COMMANDS.map((c) => `${bin} ${v} ${c}`)).join(", ");
+  return [
+    "# Managed by the 5dive a2a plugin (DIVE-5083): the seat verbs for every agent with an inbox.",
+    "# Rewritten by `5dive a2a setup|enable|disable`, removed by `uninstall`. Do not edit by hand.",
+    ...users.map((u) => `${u} ALL=(root) NOPASSWD: ${cmds}`),
+  ].join("\n") + "\n";
+}
+
+function userExists(name) {
+  let text = "";
+  try { text = fs.readFileSync(seam("A2A_PASSWD") || "/etc/passwd", "utf8"); } catch { return false; }
+  return text.split("\n").some((l) => l.split(":")[0] === name);
+}
+
+// Write the grant for exactly the agents the config says have an inbox (and whose account exists),
+// or remove it when there are none. visudo checks it before it goes in, so a bad file can never
+// break sudo on the box; it lands by rename, so sudo never reads half of one.
+export function syncSeatGrant(config) {
+  const file = seam("A2A_SUDOERS") || SUDOERS_FILE;
+  // A suite runs this CLI as a plain user (A2A_TEST_ROOT) and must never reach the real file.
+  if (!realRoot() && !seam("A2A_SUDOERS")) return "sudo grant: not written (not root)";
+  const users = Object.entries((config && config.agents) || {}).filter(([, v]) => v.inbox)
+    .map(([a]) => seatUser(a)).filter(userExists).sort();
+  if (!users.length) { fs.rmSync(file, { force: true }); return "sudo grant: none (no agent has an inbox)"; }
+  const tmp = path.join(path.dirname(file), `.5dive-a2a.${process.pid}`);
+  fs.writeFileSync(tmp, sudoersText(users), { mode: 0o440 });
+  fs.chmodSync(tmp, 0o440);
+  const v = sh(seam("A2A_VISUDO") || "visudo", ["-cf", tmp]);
+  if (v.rc !== 0) {
+    fs.rmSync(tmp, { force: true });
+    throw new Refusal(`5dive ${VERB}: the sudo grant for ${users.join(", ")} failed visudo, so it was not installed and those agents cannot send yet:\n${v.out.trim()}`);
+  }
+  fs.renameSync(tmp, file);
+  return `sudo grant: ${users.join(", ")} may run the agent commands (${file})`;
 }
 
 // ---- setup / enable / disable ------------------------------------------------
@@ -657,6 +715,8 @@ function cmdSetup({ flags }) {
   saveConfig(config, p);
   const notes = flags["no-system"] ? ["--no-system: files only, no service, user or web route"] : installSystem(p, config, flags);
   saveConfig(config, p);
+  // After the config is saved: a re-run of setup is also how a box set up before DIVE-5083 gets it.
+  notes.push(syncSeatGrant(config));
   out([
     `5dive ${VERB} is set up for ${config.domain}. Inbox: ${config.inbox_url}`,
     ...(enabled.length ? ["Agents with an inbox:", ...enabled.map((e) => "  " + e)] : [`No agent has an inbox yet. Turn one on: sudo 5dive ${VERB} enable <agent>`]),
@@ -672,7 +732,8 @@ function cmdEnable({ pos }) {
   if (!pos[0]) throw new Refusal(`usage: sudo 5dive ${VERB} enable <agent>`, 64);
   const did = enableAgent(p, config, pos[0]);
   saveConfig(config, p);
-  out(`${pos[0]}@${config.domain} has an inbox. Its address: ${pos[0]}@${config.domain}\n  ${did}`, { ok: true, agent: pos[0], did });
+  const grant = syncSeatGrant(config);
+  out(`${pos[0]}@${config.domain} has an inbox. Its address: ${pos[0]}@${config.domain}\n  ${did}\n${grant}`, { ok: true, agent: pos[0], did, grant });
 }
 
 function cmdDisable({ pos }) {
@@ -684,7 +745,8 @@ function cmdDisable({ pos }) {
   config.agents[a].inbox = false;
   fs.rmSync(path.join(p.cards, `${a}.json`), { force: true });
   saveConfig(config, p);
-  out(`${a}: inbox off, card withdrawn (its key is kept; enable brings the same address back)`, { ok: true, agent: a });
+  const grant = syncSeatGrant(config);
+  out(`${a}: inbox off, card withdrawn, and it can no longer run 5dive ${VERB} as root (its key is kept; enable brings the same address back)\n${grant}`, { ok: true, agent: a, grant });
 }
 
 // ---- contacts ------------------------------------------------------------------
@@ -1080,6 +1142,9 @@ function cmdCard({ pos }) {
   const p = paths();
   const config = mustConfig(p);
   const name = pos[0] || (() => { const c = caller(); return c.agent; })();
+  // An agent name, never a path (DIVE-5083): a seat runs this as root now, and `card ../../x`
+  // printed any root-readable x.json with --json.
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(String(name || ""))) throw new Refusal(`usage: 5dive ${VERB} card [<agent>]`, 64);
   const card = readJson(path.join(p.cards, `${name}.json`), null);
   if (!card) throw new Refusal(`${name}: no card (inbox off?)`);
   const v = verifyCard(card);
@@ -1184,6 +1249,8 @@ function cmdUninstall({ flags }) {
   requireOwner("uninstall");
   const p = paths();
   const config = readJson(p.config, null);
+  // The agents' sudo goes first: nothing below may fail and leave them a root verb with no plugin.
+  syncSeatGrant({ agents: {} });
   for (const u of [UNIT_TIMER, UNIT_TICK, UNIT_INBOX, UNIT_SOCKET]) { sh("systemctl", ["disable", "--now", u]); fs.rmSync(`/etc/systemd/system/${u}`, { force: true }); }
   fs.rmSync(DROPIN_DIR, { recursive: true, force: true });
   sh("systemctl", ["daemon-reload"]);

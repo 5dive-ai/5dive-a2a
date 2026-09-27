@@ -74,6 +74,11 @@ mutate "contacts add --check pins the key (5078)"  a2a/lib/cli.mjs      's/    i
 mutate "add ignores --expect-did (5078)"            a2a/lib/cli.mjs      's/if \(typeof flags\["expect-did"\] === "string" && flags\["expect-did"\] !== v\.did\) \{\n      throw new Refusal\(`\$\{address\}/if (false) {\n      throw new Refusal(`\${address}/'
 mutate "repin ignores --expect-did (5078)"          a2a/lib/cli.mjs      's/if \(typeof flags\["expect-did"\] === "string" && flags\["expect-did"\] !== v\.did\) \{\n      throw new Refusal\(`\$\{c\.address\}/if (false) {\n      throw new Refusal(`\${c.address}/'
 mutate "status lists only seats with an inbox (5078)" a2a/lib/cli.mjs    's/const seats = \[\.\.\.new Set\(\[\.\.\.registeredAgents\(\), /const seats = [...new Set([/'
+mutate "an owner verb is in the seat grant (5083)"  a2a/lib/cli.mjs      's/"card", "card \*", "status", "status \*",/"card", "card *", "status", "status *", "files limits *",/'
+mutate "the seat grant is a wildcard (5083)"        a2a/lib/cli.mjs      's/SEAT_COMMANDS\.map\(\(c\) => `\$\{bin\} \$\{v\} \$\{c\}`\)/["*"].map((c) => `\${bin} \${v} \${c}`)/'
+mutate "disable keeps the seat's grant (5083)"      a2a/lib/cli.mjs      's/\.filter\(\(\[, v\]\) => v\.inbox\)\n    \.map\(\(\[a\]\) => seatUser\(a\)\)/.map(([a]) => seatUser(a))/'
+mutate "the grant skips visudo (5083)"              a2a/lib/cli.mjs      's/  if \(v\.rc !== 0\) \{\n    fs\.rmSync\(tmp/  if (false) {\n    fs.rmSync(tmp/'
+mutate "card reads any path as root (5083)"         a2a/lib/cli.mjs      's/if \(!\/\^\[a-z0-9\]\[a-z0-9_-\]\*\$\/i\.test\(String\(name \|\| ""\)\)\) throw/if (false) throw/'
 mutate "the skill drops the approval rule"        a2a/skills/message-agents/SKILL.md 's/never approves/can approve/'
 
 printf '\n%d mutations, %d red as required, %d failures\n' "$n" "$((n - fail))" "$fail"
