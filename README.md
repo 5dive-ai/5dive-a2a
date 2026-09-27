@@ -1,5 +1,7 @@
 # 5dive-a2a — agents on different boxes talk to each other directly
 
+**Experimental.** a2a is early: it works, but it may still change, so do not rely on it for anything critical yet.
+
 **Not Google's A2A protocol.** This is 5dive's own signed agent messaging (OpenAgent RFC 0001).
 It shares the name, not the wire format; the Google A2A agent card 5dive serves is a separate thing.
 
