@@ -801,9 +801,23 @@ async function cmdAllow({ pos }) {
 
 // ---- send -------------------------------------------------------------------------
 
-function readText(pos, flags) {
+// The argv that reads a seat-supplied path AS that seat: root never opens it (see stageFile).
+function seatReader(c, abs) {
+  return realRoot() ? ["runuser", "-u", c.user, "--", "cat", "--", abs] : ["cat", "--", abs];
+}
+
+// --message-file=<path> is read as the seat too (DIVE-5071): read by root, it let an agent send
+// its own signing key, or /etc/shadow, to a contact as the message text.
+export function readMessageFile(c, file) {
+  const argv = seatReader(c, path.resolve(file));
+  const r = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", maxBuffer: MAX_BODY_BYTES * 4, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  if (r.status !== 0 || r.error) throw new Refusal(`${file}: ${(r.stderr || "").trim().replace(/^cat: /, "") || (r.error && r.error.message) || "could not read it"}`, 64);
+  return r.stdout;
+}
+
+function readText(c, pos, flags) {
   if (flags["message-file"] === "-" ) return fs.readFileSync(0, "utf8");
-  if (typeof flags["message-file"] === "string") return fs.readFileSync(flags["message-file"], "utf8");
+  if (typeof flags["message-file"] === "string") return readMessageFile(c, flags["message-file"]);
   return pos.join(" ");
 }
 
@@ -822,7 +836,7 @@ async function cmdSend({ pos, flags }) {
   const contact = list.find((x) => x.nick === target || x.address === String(target || "").toLowerCase());
   if (!contact) throw new Refusal(`'${target || ""}' is not a contact. Only the owner adds contacts (sudo 5dive ${VERB} contacts add <name@domain>); an agent sends only to those.`, 64);
   if (contact.status !== "active") throw new Refusal(`${contact.address}: its key changed since it was added; the owner must confirm (contacts repin) before anything is sent`);
-  const body = readText(pos, flags).replace(/\n+$/, "");
+  const body = readText(c, pos, flags).replace(/\n+$/, "");
   const want = flags.file || [];
   if (!body && !want.length) throw new Refusal("nothing to send", 64);
   if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) throw new Refusal(`message is over 16 KiB; send it as a file: --file=<path>`, 64);
@@ -901,7 +915,7 @@ export async function stageFile(p, config, c, src, { now, ttl, id, to }) {
   fs.mkdirSync(dir, { mode: 0o750 });
   const disk = path.join(dir, name);
   const abs = path.resolve(src);
-  const argv = realRoot() ? ["runuser", "-u", c.user, "--", "cat", "--", abs] : ["cat", "--", abs];
+  const argv = seatReader(c, abs);
   const r = await new Promise((resolve) => {
     const hash = crypto.createHash("sha256");
     const fd = fs.openSync(disk, "wx", 0o640);

@@ -97,6 +97,12 @@ try {
     const why = await refused(src);
     arm(/Permission denied/.test(why), `a seat cannot send ${src === secret ? "a root-only 0600 file" : src} (read as the seat, not root)`, why || "it was staged");
   }
+  let why = "";
+  try { cli.readMessageFile(seat, path.join(p.keys, "main.key")); } catch (e) { why = String(e.message); }
+  arm(/Permission denied/.test(why), "a seat cannot send the signing key as --message-file", why || "it was read");
+  let text = "";
+  try { text = cli.readMessageFile(seat, readable); } catch (e) { text = String(e.message); }
+  arm(text === "a file the seat can read\n", "--message-file still reads what the seat can read", text);
   const staged = state.listFiles(p);
   arm(staged.length === 0, "a refused file leaves nothing behind", `${staged.length} staged`);
   let f = null;

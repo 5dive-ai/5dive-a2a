@@ -82,12 +82,12 @@ fi
 echo "== positive control: a sent file read by root instead of the seat (DIVE-5071) must go red"
 mkdir -p "$run/mutant2"
 cp "$repo"/a2a/lib/*.mjs "$run/mutant2/"
-perl -0pi -e 's/const argv = realRoot\(\) \? \["runuser", "-u", c\.user, "--", "cat", "--", abs\] : /const argv = /' "$run/mutant2/cli.mjs"
+perl -0pi -e 's/return realRoot\(\) \? \["runuser", "-u", c\.user, "--", "cat", "--", abs\] : /return /' "$run/mutant2/cli.mjs"
 if cmp -s "$repo/a2a/lib/cli.mjs" "$run/mutant2/cli.mjs"; then
   echo "FAIL  the mutation did not apply (pattern drifted)"; fail=1
 elif arm mutant2 "$run/mutant2" >"$run/mutant2.log" 2>&1; then
   cat "$run/mutant2.log"; echo "FAIL  the arm stayed GREEN with the file read as root"; fail=1
-elif grep -q "^FAIL  a seat cannot send /etc/shadow" "$run/mutant2.log"; then
+elif grep -q "^FAIL  a seat cannot send /etc/shadow" "$run/mutant2.log" && grep -q "^FAIL  a seat cannot send the signing key as --message-file" "$run/mutant2.log"; then
   echo "ok    the arm went red with the file read as root (a seat could send /etc/shadow)"
 else
   cat "$run/mutant2.log"; echo "FAIL  the arm went red, but not on the read-as-seat arm"; fail=1

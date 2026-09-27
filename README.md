@@ -114,6 +114,7 @@ that what it downloaded is what was sent; the delivery text gives the agent the 
 
 - **Read as the agent, never as root.** The copy is read by `runuser -u <the calling seat> cat`,
   so an agent can send only what it could already read: not `/etc/shadow`, not the signing keys.
+  `--message-file=<path>` is read the same way (before 0.3.0 root read it).
 - **Expiry:** 24h by default, `--file-ttl=` up to 7 days (the message clamp). An expired,
   revoked, unknown or guessed token is the same bare `404`; there is no listing. The delivery
   timer deletes expired files. The owner revokes one early with `sudo 5dive a2a files rm <token>`
