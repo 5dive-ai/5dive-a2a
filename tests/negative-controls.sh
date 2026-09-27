@@ -70,6 +70,10 @@ mutate "the tick never deletes expired files (5071)" a2a/lib/cli.mjs     's/cons
 mutate "the fetch line skips the sha256 (5071)"     a2a/lib/cli.mjs      's/ && echo \x27\$\{f\.sha256\}  \$\{out\}\x27 \| sha256sum -c -//'
 mutate "a seat sets the file caps (5071)"           a2a/lib/cli.mjs      's/requireOwner\("files limits"\);/caller();/'
 mutate "revoke leaves the link live (5071)"         a2a/lib/state.mjs    's/fs\.rmSync\(meta, \{ force: true \}\);\n  fs\.rmSync\(path\.join\(p\.files, token\)/fs.rmSync(path.join(p.files, token + "-gone")/'
+mutate "contacts add --check pins the key (5078)"  a2a/lib/cli.mjs      's/    if \(flags\.check\) \{\n      out\(`\$\{address\}/    if (false) {\n      out(`\${address}/'
+mutate "add ignores --expect-did (5078)"            a2a/lib/cli.mjs      's/if \(typeof flags\["expect-did"\] === "string" && flags\["expect-did"\] !== v\.did\) \{\n      throw new Refusal\(`\$\{address\}/if (false) {\n      throw new Refusal(`\${address}/'
+mutate "repin ignores --expect-did (5078)"          a2a/lib/cli.mjs      's/if \(typeof flags\["expect-did"\] === "string" && flags\["expect-did"\] !== v\.did\) \{\n      throw new Refusal\(`\$\{c\.address\}/if (false) {\n      throw new Refusal(`\${c.address}/'
+mutate "status lists only seats with an inbox (5078)" a2a/lib/cli.mjs    's/const seats = \[\.\.\.new Set\(\[\.\.\.registeredAgents\(\), /const seats = [...new Set([/'
 mutate "the skill drops the approval rule"        a2a/skills/message-agents/SKILL.md 's/never approves/can approve/'
 
 printf '\n%d mutations, %d red as required, %d failures\n' "$n" "$((n - fail))" "$fail"

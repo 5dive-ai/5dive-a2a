@@ -648,8 +648,10 @@ function cmdSetup({ flags }) {
   config.inbox_url = flags["inbox-url"] || config.inbox_url || `https://${config.domain}/openagent/inbox`;
   config.allowlist ||= { enabled: false, homes: [] };
   saveConfig(config, p);
-  const enabled = [];
-  for (const a of String(flags.agents || "").split(",").map((s) => s.trim()).filter(Boolean)) enabled.push(`${a}@${config.domain}  ${enableAgent(p, config, a)}`);
+  for (const a of String(flags.agents || "").split(",").map((s) => s.trim()).filter(Boolean)) enableAgent(p, config, a);
+  // DIVE-5078: the summary lists every agent the CONFIG says has an inbox, not only the ones this
+  // run turned on: a re-run on a box whose agents already have one said "No agent has an inbox yet".
+  const enabled = Object.entries(config.agents).filter(([, v]) => v.inbox).map(([a, v]) => `${a}@${config.domain}  ${v.did}`);
   // Cards carry the inbox URL, so re-sign every enabled agent's card.
   for (const [a, v] of Object.entries(config.agents)) if (v.inbox) writeCard(p, config, a);
   saveConfig(config, p);
@@ -720,6 +722,17 @@ async function cmdContacts({ pos, flags }) {
     const nick = String(flags.as || addr.name);
     if (!/^[a-z][a-z0-9-]{0,27}$/.test(nick)) throw new Refusal(`nickname '${nick}' must be lowercase letters, digits and dashes (max 28)`, 64);
     const prev = find(address);
+    // DIVE-5078: --check is the dashboard's first half of an add. It fetches and verifies the card
+    // and writes nothing, so the owner sees the key before trusting it. The second half passes
+    // --expect-did=<the key they saw>, and a card that changed in between is refused, not pinned.
+    if (flags.check) {
+      out(`${address}\n  key    ${v.did}\n  inbox  ${v.inbox}${prev ? `\n  already a contact (${prev.nick})${prev.did !== v.did ? " with a DIFFERENT key" : ""}` : ""}\nNothing added. To add it: sudo 5dive ${VERB} contacts add ${address} --expect-did=${v.did}`,
+        { ok: true, check: true, address, nick: String(flags.as || addr.name), did: v.did, fingerprint: shortDid(v.did), inbox: v.inbox, contact: prev || null });
+      return;
+    }
+    if (typeof flags["expect-did"] === "string" && flags["expect-did"] !== v.did) {
+      throw new Refusal(`${address} now shows ${v.did}, not the key you confirmed (${flags["expect-did"]}). Not added. Check it again.`);
+    }
     if (prev && prev.did !== v.did) throw new Refusal(`${address} is already a contact with a DIFFERENT key (${shortDid(prev.did)} -> ${shortDid(v.did)}). If the owner there confirms the box was rebuilt: sudo 5dive ${VERB} contacts repin ${prev.nick} --yes`);
     if (prev) { out(`${address} is already a contact (${prev.nick})`, { ok: true, contact: prev }); return; }
     if (list.some((c) => c.nick === nick)) throw new Refusal(`the nickname '${nick}' is taken; pass --as=<another>`, 64);
@@ -747,6 +760,14 @@ async function cmdContacts({ pos, flags }) {
     const addr = parseAddress(c.address);
     const v = verifyCard(await fetchCard(addr, flags));
     if (!v.ok || v.id !== c.address) throw new Refusal(`${c.address}: ${v.ok ? "card is for " + v.id : v.reason}`);
+    if (flags.check) {
+      out(`${c.address}\n  pinned ${c.did}\n  now    ${v.did}${v.did === c.did ? "\n  the same key: nothing to repin" : ""}`,
+        { ok: true, check: true, contact: c, did: v.did, fingerprint: shortDid(v.did), pinned_fingerprint: shortDid(c.did), same: v.did === c.did });
+      return;
+    }
+    if (typeof flags["expect-did"] === "string" && flags["expect-did"] !== v.did) {
+      throw new Refusal(`${c.address} now shows ${v.did}, not the key you confirmed (${flags["expect-did"]}). Not repinned. Check it again.`);
+    }
     if (!flags.yes) throw new Refusal(`${c.address} now shows ${v.did} (pinned: ${c.did}). Confirm with the owner there, then re-run with --yes`, 64);
     Object.assign(c, { did: v.did, inbox: v.inbox, status: "active", repinned_at: new Date().toISOString() });
     saveContacts(list, p);
@@ -1008,6 +1029,13 @@ function cmdStatus() {
   const contacts = loadContacts(p);
   const agents = Object.entries(config.agents || {}).filter(([, v]) => v.inbox).map(([k, v]) => ({ address: `${k}@${config.domain}`, did: v.did }));
   const waiting = listSpool(p).length;
+  // DIVE-5078: every seat on the box with its inbox state, read from the config (the dashboard's
+  // per-agent toggle), and the last delivery from the event log.
+  const seats = [...new Set([...registeredAgents(), ...Object.keys(config.agents || {})])].sort().map((a) => {
+    const v = (config.agents || {})[a] || {};
+    return { agent: a, inbox: !!v.inbox, address: `${a}@${config.domain}`, did: v.did || null };
+  });
+  const last = lastDelivery(p);
   const unreadable = inboxUnreadable(p);
   const served = listFiles(p).filter((m) => m.expires_at > Date.now());
   const servedBytes = served.reduce((n, m) => n + (m.size || 0), 0);
@@ -1015,9 +1043,29 @@ function cmdStatus() {
     `domain ${config.domain}   inbox ${config.inbox_url}   service ${active}   delivery ${timer}`,
     `agents with an inbox: ${agents.map((a) => a.address).join(", ") || "none"}`,
     `contacts: ${contacts.length}   waiting: ${waiting}   allowlist: ${config.allowlist && config.allowlist.enabled ? "on" : "off"}   files served: ${served.length} (${mib(servedBytes)} of ${mib(fileLimits(config).maxTotalBytes)})`,
+    ...(last ? [`last delivery: ${new Date(last.at).toISOString()} to ${last.agent}`] : []),
     ...(unreadable.length ? [`PROBLEM: inbox cannot read ${unreadable.map((f) => path.basename(f)).join(" and ")}: it refuses every message (503) until repaired. Repair: sudo 5dive ${VERB} setup`] : []),
-  ].join("\n"), { setup: true, domain: config.domain, inbox: config.inbox_url, service: active, delivery: timer, agents, contacts: contacts.length, waiting, files: served.length, file_bytes: servedBytes, inbox_cannot_read: unreadable });
+  ].join("\n"), { setup: true, domain: config.domain, inbox: config.inbox_url, service: active, delivery: timer, agents, contacts: contacts.length, waiting, files: served.length, file_bytes: servedBytes, inbox_cannot_read: unreadable,
+    seats, allowlist: config.allowlist || { enabled: false, homes: [] }, last_delivery: last });
   if (unreadable.length) process.exitCode = 1;
+}
+
+// The newest `delivered` event, read from the log's tail (it only grows by a line per batch).
+export function lastDelivery(p) {
+  let text = "";
+  try {
+    const fd = fs.openSync(p.events, "r");
+    try {
+      const size = fs.fstatSync(fd).size, n = Math.min(size, 256 * 1024), buf = Buffer.alloc(n);
+      fs.readSync(fd, buf, 0, n, size - n);
+      text = buf.toString("utf8");
+    } finally { fs.closeSync(fd); }
+  } catch { return null; }
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try { const e = JSON.parse(lines[i]); if (e && e.event === "delivered") return { at: e.at, agent: e.agent }; } catch { /* a torn or partial line */ }
+  }
+  return null;
 }
 
 // The files the inbox user cannot read, measured AS that user (the kernel's answer, dir
@@ -1168,8 +1216,8 @@ const USAGE = `5dive ${VERB}: agents on different boxes message each other direc
     sudo 5dive ${VERB} setup --domain=<box-domain> --agents=<a,b> [--proxy=auto|caddy|nginx|none] [--socket-group=<g>]
                           [--yes]   installs Node.js from the distribution first if the box has none
     sudo 5dive ${VERB} enable|disable <agent>
-    sudo 5dive ${VERB} contacts add <name@domain> [--as=<nick>] [--interrupt]
-    sudo 5dive ${VERB} contacts rm|mute|unmute|repin <nick>   ·   contacts interrupt <nick> on|off
+    sudo 5dive ${VERB} contacts add <name@domain> [--as=<nick>] [--interrupt] [--check | --expect-did=<did>]
+    sudo 5dive ${VERB} contacts rm|mute|unmute|repin <nick> [--check]   ·   contacts interrupt <nick> on|off
     sudo 5dive ${VERB} allow on|off|add <home>|rm <home>
     sudo 5dive ${VERB} files rm <token>  ·  files limits [--max-file=100M] [--max-total=1G]
     sudo 5dive ${VERB} uninstall [--keep-plugin]
