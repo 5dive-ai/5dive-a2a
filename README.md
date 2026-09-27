@@ -91,6 +91,11 @@ contact. Those stay with each box's owner.
 Everything before step 5 is the same `202`, so a stranger learns nothing about the contact list.
 Forged messages never count against a real contact's quota.
 
+One answer comes before step 0: if the inbox cannot read its own `config.json` or `contacts.json`,
+it answers **503** to everyone and logs `inbox-cannot-read` once to `events.log`, so the sender's
+`peer send` fails instead of reporting a 202 nobody will deliver. `peer status` says
+`PROBLEM: inbox cannot read …` and exits 1; `sudo 5dive peer setup` repairs the ownership.
+
 ## Owner commands
 
 ```bash

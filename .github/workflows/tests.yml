@@ -29,3 +29,7 @@ jobs:
       # 127.0.0.1 (and a copy with the network guards removed can: the positive control).
       - name: sandbox arm
         run: sudo bash tests/sandbox.sh "$(command -v node)"
+      # DIVE-5064: root rewrites contacts/config, the inbox runs as its own user and must
+      # still read them (the node suites run as one uid and cannot see this).
+      - name: ownership arm
+        run: sudo bash tests/ownership.sh "$(command -v node)"

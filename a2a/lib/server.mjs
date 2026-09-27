@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_REQUEST_BYTES } from "./core.mjs";
 import { receive, DEFAULT_LIMITS } from "./receiver.mjs";
-import { paths, readJson, fileStore, loadContacts } from "./state.mjs";
+import { paths, readJson, readJsonStrict, fileStore } from "./state.mjs";
 
 const INBOX_SOCKET = "/run/5dive-a2a/inbox.sock";
 
@@ -31,29 +31,46 @@ export function clientIp(req) {
   return peer;
 }
 
+// Throws when config.json or contacts.json is there but unreadable: an empty contact list
+// would make every contact a stranger, dropped with the same 202 (DIVE-5064).
 export function buildContext(p = paths()) {
-  const config = readJson(p.config, {}) || {};
+  const config = readJsonStrict(p.config, {}) || {};
+  const doc = readJsonStrict(p.contacts, { contacts: [] }) || {};
   const contacts = new Map();
-  for (const c of loadContacts(p)) contacts.set(c.did, c);
+  for (const c of Array.isArray(doc.contacts) ? doc.contacts : []) contacts.set(c.did, c);
   const agents = new Map();
   for (const [name, a] of Object.entries(config.agents || {})) if (a && a.inbox && a.did) agents.set(a.did, name);
   return { config, contacts, agents, limits: { ...DEFAULT_LIMITS, ...(config.limits || {}) } };
 }
 
 export function createInbox({ p = paths(), store = fileStore(p), now = () => Date.now() } = {}) {
-  let ctx = buildContext(p);
+  let ctx = null;
   let stamp = "";
   let allow = null;
-  const refresh = async () => {
+  let broken = "";
+  const refresh = () => {
     // Re-read config, contacts and the resolved allowlist when any file changes, so an
-    // owner's `contacts rm` takes effect on the next message, with no restart.
-    const s = [p.config, p.contacts, p.allowIps].map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }).join(":");
+    // owner's `contacts rm` takes effect on the next message, with no restart. The stamp
+    // is inode + ctime + mtime: a rename is a new inode, and a chgrp/chmod heal moves
+    // only the ctime (DIVE-5064).
+    const s = [p.config, p.contacts, p.allowIps].map((f) => { try { const st = fs.statSync(f); return `${st.ino}.${st.ctimeMs}.${st.mtimeMs}`; } catch (e) { return e && e.code; } }).join(":");
     if (s === stamp) return;
-    ctx = buildContext(p); stamp = s;
+    try { ctx = buildContext(p); } catch (e) {
+      // Fail closed: no stale contact list (a removed contact must not get back in), and
+      // the owner is told once per new failure, not once per message.
+      ctx = null; allow = null; stamp = s;
+      if (e.message !== broken) store.log({ at: now(), event: "inbox-cannot-read", file: e.file, error: e.code || String(e.message) });
+      broken = e.message;
+      return;
+    }
+    stamp = s;
+    if (broken) store.log({ at: now(), event: "inbox-can-read", file: p.contacts });
+    broken = "";
     const al = ctx.config.allowlist;
     // Root resolves the homes (this process has no DNS); on with no file yet refuses all.
     allow = al && al.enabled ? new Set((readJson(p.allowIps, null) || { ips: [] }).ips) : null;
   };
+  try { refresh(); } catch { /* the first request tries again */ }
 
   const server = http.createServer(async (req, res) => {
     const url = (req.url || "").split("?")[0];
@@ -83,7 +100,11 @@ export function createInbox({ p = paths(), store = fileStore(p), now = () => Dat
       req.on("end", () => resolve(over ? null : Buffer.concat(chunks)));
       req.on("error", () => resolve(null));
     });
-    try { await refresh(); } catch { /* keep the last good context */ }
+    try { refresh(); } catch { /* keep the last good context */ }
+    // The inbox cannot read its own trust root: say so (503, the same to everyone, before
+    // any check), so the sender's `peer send` fails instead of reporting a 202 that
+    // nobody will ever deliver.
+    if (!ctx) { res.writeHead(503, { "content-type": "application/json", connection: "close" }).end('{"status":"unavailable"}'); return; }
     let result;
     try {
       result = receive({ ip: clientIp(req), bytes, now: now() }, { ...ctx, allow, store });
