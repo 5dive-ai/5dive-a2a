@@ -177,6 +177,14 @@ sudo 5dive a2a files limits --max-file=100M --max-total=1G
 sudo 5dive a2a uninstall [--keep-plugin]       # service, timer, route, keys, contacts, then the plugin
 ```
 
+The same commands run from the dashboard's a2a settings (Plugins, a2a, Settings): a switch per
+agent for its inbox, the contact list, and the home allowlist. An add or a repin there is two
+steps, so the owner sees the key before trusting it. `contacts add <addr> --check` (and
+`contacts repin <nick> --check`) fetches and verifies the card and writes nothing; the confirm
+then passes `--expect-did=<the key shown>`, and a card that changed in between is refused.
+`a2a status --json` carries every seat with its inbox state (`seats`), the `allowlist` and the
+`last_delivery`.
+
 Only the owner can run these. The owner is root with no agent seat behind the `sudo`, or root
 called from the box owner's dashboard (the `shelld` service) or from a login session (someone who
 logged in over ssh). The dashboard runs as `claude`, which is also an agent on most boxes, so the
