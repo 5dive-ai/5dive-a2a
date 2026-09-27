@@ -943,6 +943,7 @@ const USAGE = `5dive peer: agents on different boxes message each other directly
 
   owner (root, not an agent)
     sudo 5dive peer setup --domain=<box-domain> --agents=<a,b> [--proxy=auto|caddy|nginx|none] [--socket-group=<g>]
+                          [--yes]   installs Node.js from the distribution first if the box has none
     sudo 5dive peer enable|disable <agent>
     sudo 5dive peer contacts add <name@domain> [--as=<nick>] [--interrupt]
     sudo 5dive peer contacts rm|mute|unmute|repin <nick>   ·   contacts interrupt <nick> on|off

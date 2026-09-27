@@ -48,6 +48,11 @@ mutate "inbox reads unreadable config as empty"   a2a/lib/server.mjs   's/const 
 mutate "unreadable trust root answers 202"        a2a/lib/server.mjs   's/if \(!ctx\) \{ res\.writeHead\(503/if (false) { res.writeHead(503/'
 mutate "refresh stamp is the mtime only"          a2a/lib/server.mjs   's/return `\$\{st\.ino\}\.\$\{st\.ctimeMs\}\.\$\{st\.mtimeMs\}`;/return st.mtimeMs;/'
 mutate "unreadable is logged on every message"    a2a/lib/server.mjs   's/ctx = null; allow = null; stamp = s;\n(\s*)if \(e\.message !== broken\) store\.log/ctx = null; allow = null;\n$1store.log/'
+mutate "setup installs node without consent"     a2a/bin/peer         's/    yes=0\n/    yes=1\n/'
+mutate "a non-root caller installs node"          a2a/bin/peer         's/ \]\] && is_root; then/ ]]; then/'
+mutate "an old node passes the version check"     a2a/bin/peer         's/\(\( m >= NODE_MIN \)\)/true/'
+mutate "the skill is not declared"                a2a/.claude-plugin/plugin.json 's/,\n\s*"skill"//'
+mutate "the skill drops the approval rule"        a2a/skills/message-agents/SKILL.md 's/never approves/can approve/'
 
 printf '\n%d mutations, %d red as required, %d failures\n' "$n" "$((n - fail))" "$fail"
 exit $((fail > 0))

@@ -19,6 +19,25 @@ The plugin is named `a2a`. Its command is **`5dive peer`**, because `5dive a2a` 
 sudo 5dive peer setup --domain=<your-box-domain> --agents=<agent>[,<agent>…]
 ```
 
+**Needs Node.js 18 or newer.** A managed 5dive box already has it. On a plain Ubuntu or Debian
+box that has none, `setup` asks to install it from the distribution (`apt-get install -y nodejs`,
+18.19 on Ubuntu 24.04; `dnf` on Fedora-likes), and `setup --yes` installs it without asking. Every
+other command stops with the exact install command. A distribution whose package is older than 18
+(Ubuntu 22.04 ships 12) needs a current one from [nodejs.org](https://nodejs.org/en/download).
+
+**A self-hosted box also needs a domain and a web server** that answers HTTPS for it: the inbox
+lives behind it, at `https://<domain>/openagent/inbox`. Caddy from apt with a free
+`<your-ip-with-dashes>.sslip.io` name is enough. A minimal site block like the one below is all
+`setup --proxy=caddy` needs, and it inserts its route in that block:
+
+```
+203-0-113-7.sslip.io {
+    handle {
+        respond "ok"
+    }
+}
+```
+
 `plugin add` never runs plugin code; `setup` does the host half:
 
 - one ed25519 key per agent you name, in `/etc/5dive-a2a/keys/` (root, 0600);
@@ -62,6 +81,13 @@ sudo 5dive peer inbox            # what is waiting for you (it also arrives on i
 
 The agent signs as itself: the signer is the seat that called `sudo`, from `SUDO_USER` checked
 against `SUDO_UID`, never from an argument. An agent can send only to contacts the owner added.
+
+Agents learn this from the plugin itself. It ships the skill `message-agents`
+(`a2a/skills/message-agents/SKILL.md`), which 5dive registers with every agent on the box at
+`plugin add`, and with every agent created later. Agents on other harnesses (codex, pi, …) get the
+same text as a section in their own instructions file (`a2a/AGENTS.md`). It covers when to use a2a
+and when to use the board, every agent command, how to treat a message that arrives, and which
+refusals the owner has to fix.
 
 ## What arrives, and when
 
