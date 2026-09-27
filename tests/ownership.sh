@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# DIVE-5064: root rewrites the trust root, the non-root inbox must still read it. Runs
+# DIVE-5064: root rewrites the trust root, the non-root inbox must still read it. DIVE-5071: a
+# sent file is read as the seat, never as root, and served by the non-root inbox. Runs
 # tests/ownership-arm.mjs as root in a private mount namespace with /etc/5dive-a2a and
 # /var/lib/5dive-a2a bound to scratch dirs, so a box that has a real install is never
 # touched. Then the positive control: the same arm against a copy of the lib with the
@@ -76,6 +77,20 @@ else
   else
     cat "$run/mutant.log"; echo "FAIL  the arm went red, but not on the ownership arms"; fail=1
   fi
+fi
+
+echo "== positive control: a sent file read by root instead of the seat (DIVE-5071) must go red"
+mkdir -p "$run/mutant2"
+cp "$repo"/a2a/lib/*.mjs "$run/mutant2/"
+perl -0pi -e 's/const argv = realRoot\(\) \? \["runuser", "-u", c\.user, "--", "cat", "--", abs\] : /const argv = /' "$run/mutant2/cli.mjs"
+if cmp -s "$repo/a2a/lib/cli.mjs" "$run/mutant2/cli.mjs"; then
+  echo "FAIL  the mutation did not apply (pattern drifted)"; fail=1
+elif arm mutant2 "$run/mutant2" >"$run/mutant2.log" 2>&1; then
+  cat "$run/mutant2.log"; echo "FAIL  the arm stayed GREEN with the file read as root"; fail=1
+elif grep -q "^FAIL  a seat cannot send /etc/shadow" "$run/mutant2.log"; then
+  echo "ok    the arm went red with the file read as root (a seat could send /etc/shadow)"
+else
+  cat "$run/mutant2.log"; echo "FAIL  the arm went red, but not on the read-as-seat arm"; fail=1
 fi
 
 [ "$fail" = 0 ] && echo "ownership: all pass" || echo "ownership: FAILED"

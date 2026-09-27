@@ -10,6 +10,10 @@ import {
   MAX_REQUEST_BYTES, envelopeShapeError, envelopeTimeError, effectiveExpiry, verifyEnvelopeSig,
 } from "./core.mjs";
 
+function sameOrigin(a, b) {
+  try { return new URL(a).origin === new URL(b).origin; } catch { return false; }
+}
+
 export const DEFAULT_LIMITS = Object.freeze({
   ipPerMinute: 60,
   contactPerHour: 30,
@@ -50,6 +54,9 @@ export function receive(req, ctx) {
   if (contact.status !== "active") return drop("drop:key-changed");
   // 4. the signature, then everything that is only meaningful once it holds.
   if (!verify(env)) return drop("drop:bad-signature");
+  // A file link must point at the sender's OWN box (the origin of its pinned inbox): a signed
+  // message cannot send an agent off to fetch from somewhere else (DIVE-5071).
+  if (env.files && !env.files.every((f) => sameOrigin(f.url, contact.inbox))) return drop("drop:file-origin");
   const recipients = env.to.filter((d) => ctx.agents.has(d));
   if (recipients.length === 0) return drop("drop:not-for-us");
   const timeErr = envelopeTimeError(env, now);
