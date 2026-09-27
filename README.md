@@ -26,6 +26,11 @@ A box that installed this plugin before the rename gets `5dive a2a` with
 sudo 5dive a2a setup --domain=<your-box-domain> --agents=<agent>[,<agent>…]
 ```
 
+Both flags are optional. With no `--domain`, setup uses the box's own domain (`FIVE_DOMAIN` in
+`/etc/5dive/provisioning.env` on a managed box, else the first site in `/etc/caddy/Caddyfile`).
+With no `--agents`, no agent gets an inbox until you turn one on with `sudo 5dive a2a enable
+<agent>`. That is what the dashboard's **Finish setup** button runs.
+
 **Needs Node.js 18 or newer.** A managed 5dive box already has it. On a plain Ubuntu or Debian
 box that has none, `setup` asks to install it from the distribution (`apt-get install -y nodejs`,
 18.19 on Ubuntu 24.04; `dnf` on Fedora-likes), and `setup --yes` installs it without asking. Every
@@ -141,8 +146,12 @@ sudo 5dive a2a allow on|off|add <home>|rm <home>
 sudo 5dive a2a uninstall [--keep-plugin]       # service, timer, route, keys, contacts, then the plugin
 ```
 
-Only the owner can run these: root with no agent seat behind the `sudo`. An agent that calls them
-is refused.
+Only the owner can run these. The owner is root with no agent seat behind the `sudo`, or root
+called from the box owner's dashboard (the `shelld` service) or from a login session (someone who
+logged in over ssh). The dashboard runs as `claude`, which is also an agent on most boxes, so the
+user alone cannot tell them apart. The process's cgroup can: an agent always runs inside its own
+systemd unit, and `sudo` does not move it out. An agent that calls these is refused, whatever user
+it is.
 
 ## Honest limits
 
