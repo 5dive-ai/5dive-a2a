@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import dns from "node:dns/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -23,6 +24,12 @@ const SELF_DIR = path.dirname(fileURLToPath(import.meta.url));
 const INSTALL_DIR = "/usr/local/lib/5dive-a2a";
 const SVC_USER = "5dive-a2a";
 const UNIT_INBOX = "5dive-a2a-inbox.service";
+const UNIT_SOCKET = "5dive-a2a-inbox.socket";
+const DROPIN_DIR = `/etc/systemd/system/${UNIT_INBOX}.d`;
+// The name luca's hand fix used on teal-fox (DIVE-5061): setup writes the same file, so a
+// re-run replaces that drop-in instead of adding a second one.
+const DROPIN_NODE = `${DROPIN_DIR}/10-node-under-home.conf`;
+export const INBOX_SOCKET = "/run/5dive-a2a/inbox.sock";
 const UNIT_TICK = "5dive-a2a-deliver.service";
 const UNIT_TIMER = "5dive-a2a-deliver.timer";
 const DEBOUNCE_MS = 60 * 1000;
@@ -30,6 +37,7 @@ const URGENT_MAX = 400;
 const CADDY_BEGIN = "# 5dive-a2a:begin";
 const CADDY_END = "# 5dive-a2a:end";
 const NGINX_SNIPPET = "/etc/nginx/snippets/5dive-a2a.conf";
+const NGINX_ZONE = "/etc/nginx/conf.d/5dive-a2a.conf";
 
 const realRoot = () => typeof process.geteuid === "function" && process.geteuid() === 0;
 // Test seams are honoured only in a non-root process (see state.mjs).
@@ -162,11 +170,30 @@ function sh(cmd, args, opts = {}) {
   return { rc: r.status === null ? 1 : r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
 
-function unitText(node) {
+// The inbox has no network at all (DIVE-5061). systemd opens its socket and hands it over,
+// so the process never creates one: PrivateNetwork gives it an empty network namespace and
+// RestrictAddressFamilies refuses any socket but a unix one. On a host that also runs a
+// database, IP filtering could not have kept it off 127.0.0.1:5432; this does. The socket
+// is 0660 in the web server's group, so the proxy can connect and a seat cannot.
+export function unitText(node, { socketGroup = "root" } = {}) {
   return {
+    [UNIT_SOCKET]: `[Unit]
+Description=5dive-a2a inbox socket (the web server proxies to it)
+
+[Socket]
+ListenStream=${INBOX_SOCKET}
+SocketUser=${SVC_USER}
+SocketGroup=${socketGroup}
+SocketMode=0660
+DirectoryMode=0755
+
+[Install]
+WantedBy=sockets.target
+`,
     [UNIT_INBOX]: `[Unit]
 Description=5dive-a2a inbox (OpenAgent signed agent messages)
-After=network-online.target
+Requires=${UNIT_SOCKET}
+After=${UNIT_SOCKET}
 
 [Service]
 User=${SVC_USER}
@@ -181,11 +208,13 @@ PrivateTmp=yes
 ReadWritePaths=/var/lib/5dive-a2a
 ReadOnlyPaths=/etc/5dive-a2a
 InaccessiblePaths=-/etc/5dive-a2a/keys
-IPAddressAllow=any
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
 
 [Install]
 WantedBy=multi-user.target
 `,
+    // Delivery dials out (to 5dive agent send, and send to other boxes) but listens on nothing.
     [UNIT_TICK]: `[Unit]
 Description=5dive-a2a delivery (waiting messages -> agents, when idle)
 
@@ -207,43 +236,129 @@ WantedBy=timers.target
   };
 }
 
-function caddyBlock(port) {
-  return `    ${CADDY_BEGIN}
-    handle /openagent/inbox {
-        reverse_proxy 127.0.0.1:${port}
-    }
-    handle /openagent/agents/* {
-        reverse_proxy 127.0.0.1:${port}
-    }
-    ${CADDY_END}
+// On a 5dive box `command -v node` is /usr/local/bin/node, a symlink into /home/claude/.nvm,
+// and ProtectHome=yes hides /home: exec fails with 203/EXEC. Resolve the link, and when the
+// binary lives under /home, swap in an empty /home with only the node install mounted.
+export function resolveNode(found) {
+  if (!found) return "/usr/bin/node";
+  try { return fs.realpathSync(found); } catch { return found; }
+}
+
+export function nodeDropIn(node) {
+  if (!/^\/home\//.test(node)) return null;
+  const bin = path.dirname(node);
+  const root = path.basename(bin) === "bin" ? path.dirname(bin) : bin;
+  return `# 5dive-a2a (DIVE-5061): node is under /home (${node}). Written by \`5dive peer setup\`.
+[Service]
+ProtectHome=tmpfs
+BindReadOnlyPaths=${root}
 `;
 }
 
-function nginxSnippet(port) {
+export function caddyBlock(indent = "    ") {
+  const i = indent, ii = indent + indent, iii = ii + indent;
+  return [
+    `${i}${CADDY_BEGIN}`,
+    `${i}handle /openagent/inbox {`,
+    // Caddy has no rate limit built in: cap the size here, and the inbox counts per source.
+    `${ii}request_body {`,
+    `${iii}max_size 64KiB`,
+    `${ii}}`,
+    `${ii}reverse_proxy unix/${INBOX_SOCKET}`,
+    `${i}}`,
+    `${i}handle /openagent/agents/* {`,
+    `${ii}reverse_proxy unix/${INBOX_SOCKET}`,
+    `${i}}`,
+    `${i}${CADDY_END}`,
+  ].join("\n");
+}
+
+// withLimit: the conf.d zone is loaded, so strangers are rate-limited before node sees them.
+export function nginxSnippet(withLimit = true) {
+  const limit = withLimit ? "    limit_req zone=fivedive_a2a burst=30 nodelay;\n    limit_req_status 429;\n" : "";
+  const up = `http://unix:${INBOX_SOCKET}:`;
   return `# 5dive-a2a: the OpenAgent inbox and agent cards (include inside the 443 server block)
 location = /openagent/inbox {
-    client_max_body_size 1m;
+${limit}    client_max_body_size 64k;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_pass http://127.0.0.1:${port};
+    proxy_pass ${up};
 }
 location ^~ /openagent/agents/ {
-    proxy_set_header Host $host;
+${limit}    proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_pass http://127.0.0.1:${port};
+    proxy_pass ${up};
 }
 `;
 }
 
-// Insert our block before the site's catch-all `handle {`. Validates, reloads,
-// and restores the previous file on any failure.
-export function caddyInsert(text, port) {
-  if (text.includes(CADDY_BEGIN)) return { text, changed: false };
-  const lines = text.split("\n");
-  const i = lines.findIndex((l) => /^\s*handle\s*\{\s*$/.test(l));
-  if (i < 0) return { text, changed: false, reason: "no catch-all `handle {` in the Caddyfile" };
-  lines.splice(i, 0, caddyBlock(port).replace(/\n$/, ""));
-  return { text: lines.join("\n"), changed: true };
+export const NGINX_ZONE_TEXT = `# 5dive-a2a: per-source limit for /openagent/*, applied before the inbox sees a request
+limit_req_zone $binary_remote_addr zone=fivedive_a2a:1m rate=60r/m;
+`;
+
+// The top-level blocks of a Caddyfile: global options, (snippets) and sites, by line.
+// Braces are counted per line after stripping comments; a {placeholder} is balanced on its
+// own line, so it never moves the depth.
+export function caddyBlocks(lines) {
+  const blocks = [];
+  let depth = 0, cur = null;
+  lines.forEach((raw, n) => {
+    const l = raw.replace(/(^|\s)#.*$/, "");
+    const opens = (l.match(/\{/g) || []).length, closes = (l.match(/\}/g) || []).length;
+    if (depth === 0 && opens > closes) {
+      const head = l.slice(0, l.lastIndexOf("{")).trim();
+      cur = { start: n, head, snippet: /^\(.*\)$/.test(head), addresses: head ? head.split(/[\s,]+/).filter(Boolean) : [] };
+    }
+    depth += opens - closes;
+    if (cur && depth === 0) { cur.end = n; blocks.push(cur); cur = null; }
+  });
+  return blocks;
+}
+
+const siteHost = (a) => {
+  const m = /^(?:(https?):\/\/)?([^/:]+)(?::(\d+))?/.exec(a.toLowerCase());
+  return m && m[1] !== "http" && m[3] !== "80" ? m[2] : null;
+};
+
+// Put our block inside the site block whose address is `domain` — never a (snippet) that
+// other sites import (teal-fox, DIVE-5061) — before its catch-all `handle {` when it has
+// one, else before its closing brace (handle blocks sort by path, so either place wins).
+// Markers already present are rewritten in place when they sit in that site, and moved
+// when they do not. No site for the domain: no edit, and the reason.
+export function caddyInsert(text, domain) {
+  let lines = text.split("\n");
+  const d = String(domain || "").toLowerCase();
+  const site = () => {
+    const hits = caddyBlocks(lines).filter((b) => !b.snippet && b.addresses.some((a) => siteHost(a) === d));
+    return hits.length === 1 ? { site: hits[0] } : { reason: hits.length ? `${hits.length} site blocks name ${d}; not guessing which` : `no site block for ${d} in the Caddyfile` };
+  };
+  let t = site();
+  if (!t.site) return { text, changed: false, reason: t.reason };
+  if (t.site.end === t.site.start) return { text, changed: false, reason: `the ${d} site block is on one line` };
+  const bi = lines.findIndex((l) => l.includes(CADDY_BEGIN));
+  const ei = bi < 0 ? -1 : lines.findIndex((l, n) => n > bi && l.includes(CADDY_END));
+  let moved = false;
+  if (bi >= 0 && ei > bi) {
+    if (bi > t.site.start && ei < t.site.end) {
+      const indent = /^\s*/.exec(lines[bi])[0] || "    ";
+      lines.splice(bi, ei - bi + 1, ...caddyBlock(indent).split("\n"));
+      const out = lines.join("\n");
+      return { text: out, changed: out !== text };
+    }
+    lines.splice(bi, ei - bi + 1);
+    moved = true;
+    t = site();
+    if (!t.site) return { text, changed: false, reason: t.reason };
+  }
+  const { start, end } = t.site;
+  const inner = lines.slice(start + 1, end).find((l) => l.trim());
+  const indent = (inner && /^\s*/.exec(inner)[0]) || "    ";
+  let at = end;
+  for (let n = start + 1; n < end; n++) {
+    if (/^\s*handle\s*\{\s*$/.test(lines[n]) && /^\s*/.exec(lines[n])[0] === indent) { at = n; break; }
+  }
+  lines.splice(at, 0, ...caddyBlock(indent).split("\n"));
+  return { text: lines.join("\n"), changed: true, moved };
 }
 
 export function caddyRemove(text) {
@@ -269,39 +384,102 @@ export function nginxInsert(text, domain) {
   return { text, changed: false, reason: `no 443 server block with server_name ${domain}` };
 }
 
-function installProxy(config, flags) {
-  const port = config.port;
-  let mode = flags.proxy || "auto";
-  if (mode === "auto") mode = fs.existsSync("/etc/caddy/Caddyfile") ? "caddy" : fs.existsSync("/etc/nginx") ? "nginx" : "none";
+// Parse an EnvironmentFile= the way systemd reads it: KEY=VALUE lines, # comments, optional
+// quotes. Enough for the files a box's Caddy uses (the cf-dns.env DNS-challenge token).
+export function parseEnvFile(text) {
+  const env = {};
+  for (const line of String(text).split("\n")) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (!m || /^\s*#/.test(line)) continue;
+    let v = m[2];
+    if (/^(["']).*\1$/.test(v)) v = v.slice(1, -1);
+    env[m[1]] = v;
+  }
+  return env;
+}
+
+// `systemctl show caddy -p Environment -p EnvironmentFiles` -> the env its validate needs.
+// Files override Environment=, as in systemd.
+export function unitEnv(show, read = (f) => fs.readFileSync(f, "utf8")) {
+  const env = {};
+  for (const line of String(show).split("\n")) {
+    if (line.startsWith("Environment=")) {
+      for (const kv of line.slice(12).match(/(?:[^\s"]+|"[^"]*")+/g) || []) {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(kv.replace(/"/g, ""));
+        if (m) env[m[1]] = m[2];
+      }
+    }
+  }
+  for (const m of String(show).matchAll(/EnvironmentFiles=(\S+) \(ignore_errors=(yes|no)\)/g)) {
+    try { Object.assign(env, parseEnvFile(read(m[1]))); } catch { /* a missing optional file is systemd's business */ }
+  }
+  return env;
+}
+
+function proxyMode(flags) {
+  const mode = flags.proxy || "auto";
+  if (mode !== "auto") return mode;
+  return fs.existsSync("/etc/caddy/Caddyfile") ? "caddy" : fs.existsSync("/etc/nginx") ? "nginx" : "none";
+}
+
+// The web server's unix user and group: the socket is 0660 in that group.
+function proxyIdentity(mode, flags) {
+  const primary = (u) => (u ? sh("id", ["-gn", u]).out.trim() || null : null);
+  let user = null, group = null;
+  if (mode === "caddy") {
+    const show = sh("systemctl", ["show", "caddy", "-p", "User", "-p", "Group"]).out;
+    user = (/^User=(.*)$/m.exec(show) || [])[1] || "root";
+    group = (/^Group=(.*)$/m.exec(show) || [])[1] || primary(user);
+  } else if (mode === "nginx") {
+    let conf = "";
+    try { conf = fs.readFileSync("/etc/nginx/nginx.conf", "utf8"); } catch { /* default */ }
+    const m = /^\s*user\s+([^\s;]+)(?:\s+([^\s;]+))?\s*;/m.exec(conf);
+    user = m ? m[1] : "www-data";
+    group = (m && m[2]) || primary(user);
+  }
+  if (flags["socket-group"]) group = String(flags["socket-group"]);
+  return { user, group: group || "root" };
+}
+
+function installProxy(config, flags, mode) {
   if (mode === "caddy") {
     const file = "/etc/caddy/Caddyfile";
     const before = fs.readFileSync(file, "utf8");
-    const r = caddyInsert(before, port);
-    if (!r.changed) return r.reason ? `caddy: NOT changed (${r.reason}). Add this inside the site block yourself:\n${caddyBlock(port)}` : "caddy: route already present";
+    const r = caddyInsert(before, config.domain);
+    if (!r.changed) return r.reason ? `caddy: NOT changed (${r.reason}). Add this inside the ${config.domain} site block yourself:\n${caddyBlock()}` : "caddy: route already present";
     fs.copyFileSync(file, `${file}.bak-5dive-a2a`);
     fs.writeFileSync(file, r.text);
-    const v = sh("caddy", ["validate", "--config", file, "--adapter", "caddyfile"]);
+    // Validate with the caddy unit's own environment: a site that reads {env.CF_API_TOKEN}
+    // fails validate without it even when nothing changed (teal-fox, DIVE-5061).
+    const env = unitEnv(sh("systemctl", ["show", "caddy", "-p", "Environment", "-p", "EnvironmentFiles"]).out);
+    const v = sh("caddy", ["validate", "--config", file, "--adapter", "caddyfile"], { env: { ...process.env, ...env } });
     const rl = v.rc === 0 ? sh("systemctl", ["reload", "caddy"]) : v;
     if (rl.rc !== 0) { fs.writeFileSync(file, before); sh("systemctl", ["reload", "caddy"]); throw new Refusal(`caddy rejected the route; the Caddyfile was restored.\n${rl.out}`); }
     config.proxy = { kind: "caddy", file };
-    return "caddy: /openagent/inbox and /openagent/agents/* -> 127.0.0.1:" + port;
+    return `caddy: /openagent/inbox and /openagent/agents/* in the ${config.domain} site -> unix/${INBOX_SOCKET}${r.moved ? " (moved out of a block that was not that site)" : ""}; no built-in rate limit, the body is capped at 64KiB`;
   }
   if (mode === "nginx") {
+    // The zone must live at http level; conf.d is where a stock nginx.conf includes it.
+    let main = "";
+    try { main = fs.readFileSync("/etc/nginx/nginx.conf", "utf8"); } catch { /* none */ }
+    const zone = /include\s+\/etc\/nginx\/conf\.d\/\*\.conf\s*;/.test(main);
+    if (zone) { fs.mkdirSync(path.dirname(NGINX_ZONE), { recursive: true }); fs.writeFileSync(NGINX_ZONE, NGINX_ZONE_TEXT); }
     fs.mkdirSync(path.dirname(NGINX_SNIPPET), { recursive: true });
-    fs.writeFileSync(NGINX_SNIPPET, nginxSnippet(port));
+    fs.writeFileSync(NGINX_SNIPPET, nginxSnippet(zone));
+    const limitNote = zone ? "strangers limited to 60/min per source" : `NO rate limit: nginx.conf does not include conf.d, so ${NGINX_ZONE} was not written`;
     const site = flags["nginx-site"] || findNginxSite(config.domain);
     if (!site) return `nginx: wrote ${NGINX_SNIPPET}; no site file names ${config.domain}. Include it in the 443 server block yourself, then: nginx -t && systemctl reload nginx`;
     const before = fs.readFileSync(site, "utf8");
     const r = nginxInsert(before, config.domain);
-    if (!r.changed) return r.reason ? `nginx: NOT changed (${r.reason}). Include ${NGINX_SNIPPET} in the 443 server block yourself.` : "nginx: include already present";
-    fs.writeFileSync(site, r.text);
+    if (!r.changed && r.reason) return `nginx: NOT changed (${r.reason}). Include ${NGINX_SNIPPET} in the 443 server block yourself.`;
+    if (r.changed) fs.writeFileSync(site, r.text);
     const t = sh("nginx", ["-t"]);
     const rl = t.rc === 0 ? sh("systemctl", ["reload", "nginx"]) : t;
     if (rl.rc !== 0) { fs.writeFileSync(site, before); throw new Refusal(`nginx rejected the route; ${site} was restored.\n${rl.out}`); }
     config.proxy = { kind: "nginx", file: site };
-    return `nginx: ${site} includes ${NGINX_SNIPPET}`;
+    return `nginx: ${site} includes ${NGINX_SNIPPET} -> unix:${INBOX_SOCKET}; ${limitNote}`;
   }
-  return `no web server changed. Route https://${config.domain}/openagent/inbox and /openagent/agents/* to 127.0.0.1:${port} (nginx form):\n${nginxSnippet(port)}`;
+  return `no web server changed. Route https://${config.domain}/openagent/inbox and /openagent/agents/* to the unix socket ${INBOX_SOCKET} (nginx form):\n${nginxSnippet(false)}`;
 }
 
 function findNginxSite(domain) {
@@ -325,6 +503,7 @@ function removeProxy(config) {
     if (px.kind === "nginx") {
       fs.writeFileSync(px.file, text.split("\n").filter((l) => !l.includes(`include ${NGINX_SNIPPET};`)).join("\n"));
       fs.rmSync(NGINX_SNIPPET, { force: true });
+      fs.rmSync(NGINX_ZONE, { force: true });
       if (sh("nginx", ["-t"]).rc === 0) sh("systemctl", ["reload", "nginx"]);
     }
   } catch { /* nothing to undo */ }
@@ -346,28 +525,38 @@ function installSystem(p, config, flags) {
   sh("chown", ["-R", `${SVC_USER}:${SVC_USER}`, p.var]);
   fs.mkdirSync(INSTALL_DIR, { recursive: true, mode: 0o755 });
   for (const f of ["core.mjs", "receiver.mjs", "state.mjs", "server.mjs", "cli.mjs"]) fs.copyFileSync(path.join(SELF_DIR, f), path.join(INSTALL_DIR, f));
-  const node = sh("sh", ["-c", "command -v node"]).out.trim() || "/usr/bin/node";
-  for (const [name, text] of Object.entries(unitText(node))) fs.writeFileSync(`/etc/systemd/system/${name}`, text);
+  const node = resolveNode(sh("sh", ["-c", "command -v node"]).out.trim());
+  const mode = proxyMode(flags);
+  const proxy = proxyIdentity(mode, flags);
+  config.socket_group = proxy.group;
+  // The socket cannot start while an older, TCP-listening inbox still runs.
+  sh("systemctl", ["stop", UNIT_INBOX]);
+  for (const [name, text] of Object.entries(unitText(node, { socketGroup: proxy.group }))) fs.writeFileSync(`/etc/systemd/system/${name}`, text);
+  const dropIn = nodeDropIn(node);
+  if (dropIn) { fs.mkdirSync(DROPIN_DIR, { recursive: true }); fs.writeFileSync(DROPIN_NODE, dropIn); } else fs.rmSync(DROPIN_NODE, { force: true });
   sh("systemctl", ["daemon-reload"]);
+  const s = sh("systemctl", ["enable", "--now", UNIT_SOCKET]);
   const a = sh("systemctl", ["enable", "--now", UNIT_INBOX]);
   const b = sh("systemctl", ["enable", "--now", UNIT_TIMER]);
-  sh("systemctl", ["restart", UNIT_INBOX]);
-  if (a.rc || b.rc) throw new Refusal(`systemd refused the units:\n${a.out}${b.out}`);
-  // Probe as the service sees it: an agent's card served by the running inbox proves the
-  // unprivileged user can reach its config tree. A unit that is "active" proves nothing.
+  if (s.rc || a.rc || b.rc) throw new Refusal(`systemd refused the units:\n${s.out}${a.out}${b.out}`);
+  // Probe as the web server would: an agent's card, fetched over the socket by the proxy's own
+  // user, proves the group can connect and the unprivileged inbox can read its config tree.
+  // A unit that is "active" proves nothing.
   const probe = Object.entries(config.agents).find(([, v]) => v.inbox);
   if (probe) {
-    const url = `http://127.0.0.1:${config.port}/openagent/agents/${probe[0]}.json`;
+    const url = `http://localhost/openagent/agents/${probe[0]}.json`;
+    const as = proxy.user && proxy.user !== "root" ? ["runuser", "-u", proxy.user, "--"] : [];
+    const curl = [...as, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--unix-socket", INBOX_SOCKET, url];
     let code = "";
     for (let i = 0; i < 20 && code !== "200"; i++) {
-      code = sh("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", url]).out.trim();
+      code = sh(curl[0], curl.slice(1)).out.trim();
       if (code !== "200") sh("sleep", ["0.5"]);
     }
-    if (code !== "200") throw new Refusal(`the inbox service is not serving ${url} (HTTP ${code || "none"}). Check: journalctl -u ${UNIT_INBOX} -n 50, and that ${SVC_USER} can read ${p.etc}`);
-    notes.push(`probe: ${url} -> 200 as ${SVC_USER}`);
+    if (code !== "200") throw new Refusal(`the inbox is not serving ${url} on ${INBOX_SOCKET} to ${proxy.user || "root"} (HTTP ${code || "none"}). Check: journalctl -u ${UNIT_INBOX} -n 50, that ${SVC_USER} can read ${p.etc}, and the socket group (--socket-group=<the web server's group>)`);
+    notes.push(`probe: ${url} over ${INBOX_SOCKET} as ${proxy.user || "root"} -> 200`);
   }
-  notes.push(`service: ${UNIT_INBOX} on 127.0.0.1:${config.port} as ${SVC_USER}; delivery timer every 20s`);
-  notes.push(installProxy(config, flags));
+  notes.push(`service: ${UNIT_INBOX} as ${SVC_USER}, no network (unix socket ${INBOX_SOCKET}, group ${proxy.group}); delivery timer every 20s${dropIn ? `; node under /home, bound read-only by ${DROPIN_NODE}` : ""}`);
+  notes.push(installProxy(config, flags, mode));
   return notes;
 }
 
@@ -379,7 +568,6 @@ function cmdSetup({ flags }) {
   config.agents ||= {};
   config.domain = (flags.domain || config.domain || detectDomain() || "").toLowerCase();
   if (!config.domain) throw new Refusal("5dive peer setup: could not tell this box's domain. Pass it: sudo 5dive peer setup --domain=<box-domain>");
-  config.port = Number(flags.port || config.port || 7461);
   config.inbox_url = flags["inbox-url"] || config.inbox_url || `https://${config.domain}/openagent/inbox`;
   config.allowlist ||= { enabled: false, homes: [] };
   writeJson(p.config, config);
@@ -491,7 +679,35 @@ async function cmdContacts({ pos, flags }) {
   throw new Refusal(`unknown: 5dive peer contacts ${sub}`, 64);
 }
 
-function cmdAllow({ pos }) {
+// The inbox has no network, so it cannot resolve a home itself: root does, here and on the
+// delivery tick, and leaves the addresses where the inbox reads them.
+export async function resolveHomes(homes, lookup = (h, o) => dns.lookup(h, o)) {
+  const ips = new Set();
+  for (const h of homes || []) {
+    const host = String(h).replace(/:\d+$/, "");
+    if (/^[\d.]+$/.test(host) || host.includes(":")) { ips.add(host); continue; }
+    for (const fam of [4, 6]) {
+      try { for (const r of await lookup(host, { all: true, family: fam })) ips.add(r.address); } catch { /* a home that does not resolve is simply not on the list */ }
+    }
+  }
+  return [...ips];
+}
+
+const ALLOW_EVERY_MS = 5 * 60 * 1000;
+
+export async function refreshAllow(p, config, { now = Date.now(), force = false, lookup } = {}) {
+  const al = config && config.allowlist;
+  if (!al || !al.enabled) return null;
+  const cur = readJson(p.allowIps, null);
+  const same = cur && JSON.stringify(cur.homes) === JSON.stringify(al.homes);
+  if (!force && same && now - cur.at < ALLOW_EVERY_MS) return cur;
+  const doc = { at: now, homes: al.homes, ips: await resolveHomes(al.homes, lookup) };
+  writeJson(p.allowIps, doc, 0o644);
+  try { const o = fs.statSync(p.var); fs.chownSync(p.allowIps, o.uid, o.gid); } catch { /* not root (tests) */ }
+  return doc;
+}
+
+async function cmdAllow({ pos }) {
   const p = paths();
   const sub = pos[0] || "ls";
   if (sub !== "ls") requireOwner(`allow ${sub}`); else caller();
@@ -501,7 +717,7 @@ function cmdAllow({ pos }) {
   else if (sub === "add" && pos[1]) { if (!al.homes.includes(pos[1])) al.homes.push(pos[1].toLowerCase()); }
   else if (sub === "rm" && pos[1]) al.homes = al.homes.filter((h) => h !== pos[1]);
   else if (sub !== "ls") throw new Refusal("usage: sudo 5dive peer allow on|off|add <home>|rm <home>|ls", 64);
-  if (sub !== "ls") writeJson(p.config, config);
+  if (sub !== "ls") { writeJson(p.config, config); await refreshAllow(p, config, { force: true }); }
   out(`home allowlist: ${al.enabled ? "ON" : "off"}; homes: ${al.homes.join(", ") || "(none)"}` +
     (al.enabled && !al.homes.length ? "\nWARNING: on with no homes, so every message is refused." : ""), { allowlist: al });
 }
@@ -670,9 +886,10 @@ export function tick({ now = Date.now(), send } = {}) {
   return results;
 }
 
-function cmdTick() {
+async function cmdTick() {
   const c = caller();
   if (c.kind !== "owner") throw new Refusal("_tick is run by the delivery timer, not an agent", 77);
+  try { await refreshAllow(paths(), readJson(paths().config, null)); } catch { /* keep the last list */ }
   const r = tick({ now: Number(seam("A2A_NOW")) || Date.now() });
   out(JSON.stringify(r), r);
 }
@@ -683,7 +900,8 @@ function cmdUninstall({ flags }) {
   requireOwner("uninstall");
   const p = paths();
   const config = readJson(p.config, null);
-  for (const u of [UNIT_TIMER, UNIT_TICK, UNIT_INBOX]) { sh("systemctl", ["disable", "--now", u]); fs.rmSync(`/etc/systemd/system/${u}`, { force: true }); }
+  for (const u of [UNIT_TIMER, UNIT_TICK, UNIT_INBOX, UNIT_SOCKET]) { sh("systemctl", ["disable", "--now", u]); fs.rmSync(`/etc/systemd/system/${u}`, { force: true }); }
+  fs.rmSync(DROPIN_DIR, { recursive: true, force: true });
   sh("systemctl", ["daemon-reload"]);
   removeProxy(config);
   fs.rmSync(p.etc, { recursive: true, force: true });
@@ -708,7 +926,7 @@ const USAGE = `5dive peer: agents on different boxes message each other directly
     5dive peer contacts ls  ·  5dive peer card [<agent>]  ·  5dive peer status
 
   owner (root, not an agent)
-    sudo 5dive peer setup --domain=<box-domain> --agents=<a,b> [--proxy=auto|caddy|nginx|none]
+    sudo 5dive peer setup --domain=<box-domain> --agents=<a,b> [--proxy=auto|caddy|nginx|none] [--socket-group=<g>]
     sudo 5dive peer enable|disable <agent>
     sudo 5dive peer contacts add <name@domain> [--as=<nick>] [--interrupt]
     sudo 5dive peer contacts rm|mute|unmute|repin <nick>   ·   contacts interrupt <nick> on|off

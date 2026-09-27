@@ -13,6 +13,7 @@
 //     counts.json              verified-message times per contact (last hour)
 //     events.log               jsonl: skew, rate, backlog, first contact, delivery
 //     outbox.log               jsonl: what this box's agents sent (root writes)
+//     allow-ips.json           the allowlist's homes, resolved by root (the inbox has no network)
 //
 // Test seam: A2A_ETC and A2A_VAR move both trees, and are honoured ONLY in a
 // process that is not root. Through `sudo` they would be a way to point a
@@ -37,6 +38,7 @@ export function paths() {
     events: path.join(v, "events.log"),
     outbox: path.join(v, "outbox.log"),
     delivered: path.join(v, "delivered.json"),
+    allowIps: path.join(v, "allow-ips.json"),
   };
 }
 

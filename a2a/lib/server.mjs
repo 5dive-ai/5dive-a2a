@@ -1,12 +1,12 @@
-// The inbox service. Runs as the unprivileged `5dive-a2a` user on 127.0.0.1,
-// behind the box's own web server (Caddy or nginx) on 443. It holds no private
-// key: it only verifies, stores and answers. Delivery into an agent is the
-// root timer's job (`5dive peer _tick`), so this process never reaches a seat.
+// The inbox service. Runs as the unprivileged `5dive-a2a` user with no network
+// (PrivateNetwork=yes): it serves the unix socket systemd hands it, behind the
+// box's own web server (Caddy or nginx) on 443. It holds no private key: it only
+// verifies, stores and answers. Delivery into an agent is the root timer's job
+// (`5dive peer _tick`), so this process never reaches a seat.
 //
 //   POST /openagent/inbox               -> receive() -> always 202, or 429 after verify
 //   GET  /openagent/agents/<name>.json  -> the signed card
 import http from "node:http";
-import dns from "node:dns/promises";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,12 +14,15 @@ import { MAX_REQUEST_BYTES } from "./core.mjs";
 import { receive, DEFAULT_LIMITS } from "./receiver.mjs";
 import { paths, readJson, fileStore, loadContacts } from "./state.mjs";
 
-// The proxy in front is the only peer allowed to name the client. Its own
-// address is loopback, and our snippet OVERWRITES X-Forwarded-For with the
+const INBOX_SOCKET = "/run/5dive-a2a/inbox.sock";
+
+// The proxy in front is the only peer allowed to name the client. On the unix
+// socket it is the only peer at all (0660, the web server's group); over TCP (the
+// harness) it is loopback. Our proxy config OVERWRITES X-Forwarded-For with the
 // client it saw, so the last entry is the one the proxy wrote.
 export function clientIp(req) {
   const peer = (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
-  const loop = peer === "127.0.0.1" || peer === "::1";
+  const loop = !peer || peer === "127.0.0.1" || peer === "::1";
   const xff = req.headers["x-forwarded-for"];
   if (loop && typeof xff === "string" && xff.trim()) {
     const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
@@ -37,32 +40,19 @@ export function buildContext(p = paths()) {
   return { config, contacts, agents, limits: { ...DEFAULT_LIMITS, ...(config.limits || {}) } };
 }
 
-async function resolveHomes(homes) {
-  const ips = new Set();
-  for (const h of homes || []) {
-    const host = String(h).replace(/:\d+$/, "");
-    if (/^[\d.]+$/.test(host) || host.includes(":")) { ips.add(host); continue; }
-    for (const fam of [4, 6]) {
-      try { for (const r of await dns.lookup(host, { all: true, family: fam })) ips.add(r.address); } catch { /* a home that does not resolve is simply not on the list */ }
-    }
-  }
-  return ips;
-}
-
-export function createInbox({ p = paths(), store = fileStore(p), now = () => Date.now(), resolve = resolveHomes } = {}) {
+export function createInbox({ p = paths(), store = fileStore(p), now = () => Date.now() } = {}) {
   let ctx = buildContext(p);
   let stamp = "";
   let allow = null;
-  let allowAt = 0;
   const refresh = async () => {
-    // Re-read config and contacts when either file changes, so an owner's
-    // `contacts rm` takes effect on the next message, with no restart.
-    const s = [p.config, p.contacts].map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }).join(":");
-    if (s !== stamp) { ctx = buildContext(p); stamp = s; allowAt = 0; }
+    // Re-read config, contacts and the resolved allowlist when any file changes, so an
+    // owner's `contacts rm` takes effect on the next message, with no restart.
+    const s = [p.config, p.contacts, p.allowIps].map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }).join(":");
+    if (s === stamp) return;
+    ctx = buildContext(p); stamp = s;
     const al = ctx.config.allowlist;
-    if (!al || !al.enabled) { allow = null; return; }
-    // Homes move, so they are re-resolved every few minutes.
-    if (now() - allowAt > 5 * 60 * 1000) { allow = await resolve(al.homes); allowAt = now(); }
+    // Root resolves the homes (this process has no DNS); on with no file yet refuses all.
+    allow = al && al.enabled ? new Set((readJson(p.allowIps, null) || { ips: [] }).ips) : null;
   };
 
   const server = http.createServer(async (req, res) => {
@@ -110,10 +100,10 @@ export function createInbox({ p = paths(), store = fileStore(p), now = () => Dat
 // `node server.mjs` — the unit's ExecStart.
 const isEntry = () => { try { return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } };
 if (isEntry()) {
-  const p = paths();
-  const config = readJson(p.config, {}) || {};
-  const port = Number(config.port) || 7461;
-  createInbox({ p }).listen(port, "127.0.0.1", () => {
-    process.stdout.write(`5dive-a2a inbox on 127.0.0.1:${port}\n`);
+  // 5dive-a2a-inbox.socket passes fd 3 (sd_listen_fds); this process opens no socket itself.
+  const fromSystemd = process.env.LISTEN_PID === String(process.pid) && Number(process.env.LISTEN_FDS) >= 1;
+  const where = fromSystemd ? { fd: 3 } : { path: INBOX_SOCKET };
+  createInbox({ p: paths() }).listen(where, () => {
+    process.stdout.write(`5dive-a2a inbox on ${fromSystemd ? "the systemd socket" : INBOX_SOCKET}\n`);
   });
 }

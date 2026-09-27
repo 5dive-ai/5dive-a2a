@@ -35,6 +35,14 @@ mutate "no debounce before delivery"              a2a/lib/cli.mjs      's/if \(!
 mutate "send to a non-contact"                    a2a/lib/cli.mjs      's/if \(!contact\) throw new Refusal\(`.\$\{target/if (false) throw new Refusal(`\${target/'
 mutate "installed entry point never runs main()"  a2a/lib/cli.mjs      's/^if \(isEntry\(\)\) \{/if (false) {/m'
 mutate "key change not caught on send"            a2a/lib/cli.mjs      's/if \(v\.ok && v\.did !== contact\.did\)/if (false)/'
+mutate "inbox unit keeps its network"             a2a/lib/cli.mjs      's/^PrivateNetwork=yes\n//m'
+mutate "inbox may open inet sockets"               a2a/lib/cli.mjs      's/^RestrictAddressFamilies=AF_UNIX\n//m'
+mutate "node under /home is not bound"            a2a/lib/cli.mjs      's/ProtectHome=tmpfs/ProtectHome=yes/'
+mutate "caddy route goes to the file's first handle" a2a/lib/cli.mjs   's/for \(let n = start \+ 1; n < end; n\+\+\)/for (let n = 0; n < lines.length; n++)/'
+mutate "caddy markers found anywhere are kept"    a2a/lib/cli.mjs      's/if \(bi > t\.site\.start && ei < t\.site\.end\)/if (true)/'
+mutate "caddy validate ignores EnvironmentFiles"  a2a/lib/cli.mjs      's/try \{ Object\.assign\(env, parseEnvFile\(read\(m\[1\]\)\)\); \}/try { }/'
+mutate "inbox ignores the resolved allowlist"     a2a/lib/server.mjs   's/allow = al && al\.enabled \? /allow = false ? /'
+mutate "unix-socket peer cannot name the client"  a2a/lib/server.mjs   's/const loop = !peer \|\| /const loop = /'
 
 printf '\n%d mutations, %d red as required, %d failures\n' "$n" "$((n - fail))" "$fail"
 exit $((fail > 0))
