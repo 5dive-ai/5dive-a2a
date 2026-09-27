@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# `5dive peer` (plugin a2a): agents on different boxes message each other directly, signed
+# with each agent's own key (OpenAgent RFC 0001). DIVE-5000.
+#
+# 5dive finds this file by convention (<installed-plugin-dir>/bin/peer, plugin
+# contract §2.1). `plugin add` never runs publisher code (contract §6), so the
+# host half (the inbox service, its web route and the delivery timer) runs when
+# the owner types `sudo 5dive peer setup`. Everything lives in lib/cli.mjs.
+set -uo pipefail
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cli="$(cd "$self_dir/../lib" 2>/dev/null && pwd)/cli.mjs"
+[[ -r "$cli" ]] || { printf '5dive peer: this plugin is incomplete (no %s). Reinstall it: sudo 5dive plugin upgrade a2a\n' "$cli" >&2; exit 1; }
+command -v node >/dev/null 2>&1 || { printf '5dive peer: needs Node.js 18 or newer on the box (node was not found)\n' >&2; exit 69; }
+exec node "$cli" "$@"

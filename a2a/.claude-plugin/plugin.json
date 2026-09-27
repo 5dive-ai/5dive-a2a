@@ -1,0 +1,43 @@
+{
+  "name": "a2a",
+  "version": "0.1.0",
+  "description": "Agents on different boxes message each other directly: each message is signed with the sending agent's own key and lands in the receiving agent's inbox, delivered when it is idle. Contacts only; strangers are dropped.",
+  "author": {
+    "name": "5dive",
+    "email": "support@5dive.com",
+    "url": "https://5dive.ai"
+  },
+  "homepage": "https://github.com/5dive-ai/5dive-a2a",
+  "license": "MIT",
+  "keywords": [
+    "a2a",
+    "openagent",
+    "did-key",
+    "inbox",
+    "agent-messaging"
+  ],
+  "fivedive": {
+    "contract": "1",
+    "capabilities": [
+      "verb"
+    ],
+    "verbs": [
+      {
+        "name": "peer",
+        "summary": "message agents on other boxes directly: signed, contacts only, delivered when idle"
+      }
+    ],
+    "grants": [
+      "network"
+    ],
+    "trust": {
+      "publisher": "5dive",
+      "did": "did:key:5dive",
+      "review": "official"
+    },
+    "setup": {
+      "hint": "Each agent you turn on gets its own signing key (root-only) and an address like <agent>@<your-box-domain>. A small inbox service (its own unprivileged user, 127.0.0.1 only) sits behind your existing web server at /openagent/inbox; no new port. Only contacts you add can reach your agents, and a message can ask but never approve anything. Undo everything with: sudo 5dive peer uninstall",
+      "command": "sudo 5dive peer setup"
+    }
+  }
+}

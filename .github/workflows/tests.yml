@@ -1,0 +1,27 @@
+name: tests
+
+# DIVE-5000. The suites need no root, network or box: two in-process "boxes"
+# talk over real HTTP on 127.0.0.1 through the real CLI, with `5dive agent send`
+# stubbed so the harness sees exactly what reached an agent. The negative
+# controls then remove one guard at a time and require the suite to go red.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  a2a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: shellcheck
+        run: shellcheck -S warning a2a/bin/peer tests/*.sh
+      - name: manifests are valid JSON
+        run: jq -e . a2a/.claude-plugin/plugin.json .claude-plugin/marketplace.json >/dev/null
+      - name: suites
+        run: node --test --test-concurrency=1 tests/*.test.mjs
+      - name: negative controls
+        run: bash tests/negative-controls.sh
