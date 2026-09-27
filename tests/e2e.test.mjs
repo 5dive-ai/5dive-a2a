@@ -37,7 +37,10 @@ function box(name, agent, domain, uid) {
     seen: path.join(v, "seen.json"), counts: path.join(v, "counts.json"), events: path.join(v, "events.log"),
     outbox: path.join(v, "outbox.log"), delivered: path.join(v, "delivered.json"), allowIps: path.join(v, "allow-ips.json"),
   };
-  return { name, agent, domain, uid, dir, p, env: { A2A_TEST_ROOT: "1", A2A_ETC: etc, A2A_VAR: v, A2A_AGENTS_JSON: path.join(dir, "agents.json"), A2A_PASSWD: path.join(dir, "passwd"), A2A_FIVEDIVE: stub, A2A_TMP: root } };
+  // Every run is an agent unit's process unless a test says otherwise (DIVE-5073: the cgroup,
+  // not the user, is what tells the owner's dashboard from an agent).
+  fs.writeFileSync(path.join(dir, "cgroup"), "0::/system.slice/system-5dive\\x2dagent.slice/5dive-agent@" + agent + ".service\n");
+  return { name, agent, domain, uid, dir, p, env: { A2A_TEST_ROOT: "1", A2A_CGROUP: path.join(dir, "cgroup"), A2A_ETC: etc, A2A_VAR: v, A2A_AGENTS_JSON: path.join(dir, "agents.json"), A2A_PASSWD: path.join(dir, "passwd"), A2A_FIVEDIVE: stub, A2A_TMP: root } };
 }
 
 const A = box("a", "main", "a.example.com", 1101);

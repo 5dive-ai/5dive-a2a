@@ -1,7 +1,8 @@
 // `5dive a2a` (alias `5dive peer`) — every subcommand. bin/a2a and bin/peer both exec this file.
 //
 // Who may do what (the whole security model in five lines):
-//   owner  = root with no agent seat behind the sudo: setup, enable, contacts, allow, uninstall
+//   owner  = root with no agent seat behind the sudo, or root called from the owner's dashboard or
+//            a login session (ownerSurface): setup, enable, contacts, allow, uninstall
 //   seat   = an agent calling `sudo 5dive a2a send|inbox`; it signs as ITSELF, taken from
 //            SUDO_USER (cross-checked against SUDO_UID), never from an argument
 //   inbox  = the unprivileged 5dive-a2a service: verifies and stores, holds no key
@@ -108,8 +109,39 @@ function caller() {
   return { kind: "owner", user };
 }
 
+// DIVE-5073: the box owner's dashboard is shelld, a system service running as `claude` that
+// calls `sudo 5dive …`. So SUDO_USER is `claude`, which on most boxes is also an agent seat, and
+// the user alone cannot tell the owner from an agent. Where the process RUNS can: an agent runs
+// inside its own unit (system-5dive\x2dagent.slice/5dive-agent@<name>.service, or the primary
+// runtime's), and neither sudo nor runuser moves a process to another cgroup. This is the
+// predicate the 5dive CLI already clears human gates with (_gate_cgroup_human_capable,
+// src/lib/tasks_db.sh), copied rather than called so it works on any 5dive CLI:
+//   /system.slice/shelld.service         the dashboard (its buttons and its terminal)
+//   /user.slice/…/session-<n>.scope      a person who logged in over ssh and typed sudo
+// Hardcoded, with no environment override at real root: a knob on a fail-closed accept list is
+// a way for an agent to name its own cgroup. An unreadable or unrecognised cgroup is not the owner.
+export function cgroupPath(text) {
+  let sysd = "", uni = "";
+  for (const line of String(text).split("\n")) {
+    if (/^\d+:name=systemd:/.test(line)) sysd = line;
+    else if (line.startsWith("0::")) uni = line;
+  }
+  const line = sysd || uni;
+  return line ? line.replace(/^[^:]*:[^:]*:/, "") : null;
+}
+
+export function ownerSurface(cg) {
+  if (!cg) return false;
+  return cg === "/system.slice/shelld.service" || /^\/user\.slice\/.+\/session-[^/]+\.scope$/.test(cg);
+}
+
+function callerCgroup() {
+  try { return cgroupPath(fs.readFileSync(seam("A2A_CGROUP") || "/proc/self/cgroup", "utf8")); } catch { return null; }
+}
+
 function requireOwner(what) {
   const c = caller();
+  if (c.kind !== "owner" && ownerSurface(callerCgroup())) return { kind: "owner", user: c.user, via: "surface" };
   if (c.kind !== "owner") {
     throw new Refusal(`5dive ${VERB} ${what}: only the box owner can do this, not an agent (called from ${c.user}). ` +
       "Contacts, keys and the inbox are the owner's trust root; a message or an agent cannot change them.", 77);
@@ -135,7 +167,20 @@ function ensureTree(p) {
   if (!fs.existsSync(p.contacts)) saveContacts([], p);
 }
 
+// DIVE-5073: a first-time `setup` from the dashboard has no way to pass --domain, so the box
+// must know its own. A managed box records it at provisioning; any other box is read off the
+// first site in its Caddyfile.
+export function provisionedDomain(text) {
+  const m = /^\s*(?:export\s+)?FIVE_DOMAIN=["']?([a-z0-9][a-z0-9.-]*\.[a-z]{2,})["']?\s*$/im.exec(String(text));
+  return m ? m[1].toLowerCase() : null;
+}
+
 function detectDomain() {
+  try {
+    const d = provisionedDomain(fs.readFileSync(seam("A2A_PROVISIONING_ENV") || "/etc/5dive/provisioning.env", "utf8"));
+    if (d) return d;
+  } catch { /* not a managed box */ }
+  if (seam("A2A_PROVISIONING_ENV")) return null;
   try {
     const text = fs.readFileSync("/etc/caddy/Caddyfile", "utf8");
     for (const line of text.split("\n")) {
