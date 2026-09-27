@@ -25,3 +25,7 @@ jobs:
         run: node --test --test-concurrency=1 tests/*.test.mjs
       - name: negative controls
         run: bash tests/negative-controls.sh
+      # DIVE-5061: the inbox unit's own sandbox, as transient systemd units, cannot reach
+      # 127.0.0.1 (and a copy with the network guards removed can: the positive control).
+      - name: sandbox arm
+        run: sudo bash tests/sandbox.sh "$(command -v node)"

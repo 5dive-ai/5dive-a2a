@@ -35,7 +35,7 @@ function box(name, agent, domain, uid) {
     etc, var: v, config: path.join(etc, "config.json"), contacts: path.join(etc, "contacts.json"),
     keys: path.join(etc, "keys"), cards: path.join(etc, "cards"), spool: path.join(v, "spool"),
     seen: path.join(v, "seen.json"), counts: path.join(v, "counts.json"), events: path.join(v, "events.log"),
-    outbox: path.join(v, "outbox.log"), delivered: path.join(v, "delivered.json"),
+    outbox: path.join(v, "outbox.log"), delivered: path.join(v, "delivered.json"), allowIps: path.join(v, "allow-ips.json"),
   };
   return { name, agent, domain, uid, dir, p, env: { A2A_TEST_ROOT: "1", A2A_ETC: etc, A2A_VAR: v, A2A_AGENTS_JSON: path.join(dir, "agents.json"), A2A_PASSWD: path.join(dir, "passwd"), A2A_FIVEDIVE: stub, A2A_TMP: root } };
 }
@@ -193,6 +193,21 @@ test("a may-interrupt contact skips the debounce", async () => {
   // the batch header alone is over it, so this goes the normal way, at the end of the turn.
   assert.match(inv[n], /^ARGV agent send luca --from=a2a-main --message-file=\S+( --urgent)?$/);
   await run(B, ["contacts", "interrupt", "main", "off"]);
+});
+
+test("the home allowlist is resolved by root (`peer allow`) and read by the inbox, which has no DNS", async () => {
+  const before = spool(B).length;
+  assert.equal((await run(B, ["allow", "add", "192.0.2.50"])).rc, 0);
+  assert.equal((await run(B, ["allow", "on"])).rc, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(B.p.allowIps, "utf8")).ips, ["192.0.2.50"]);
+  assert.equal((await run(A, ["send", "luca", "from a home not on the list"], { seat: true })).rc, 0);
+  assert.equal(spool(B).length, before, "127.0.0.1 is not an allowed home: dropped");
+  assert.equal((await run(B, ["allow", "add", "127.0.0.1"])).rc, 0);
+  assert.equal((await run(A, ["send", "luca", "from an allowed home"], { seat: true })).rc, 0);
+  assert.equal(spool(B).length, before + 1, "the inbox picked up the re-resolved list with no restart");
+  assert.equal((await run(B, ["allow", "off"])).rc, 0);
+  assert.equal((await run(B, ["_tick"], { env: { A2A_NOW: String(Date.now() + 61_000) } })).rc, 0);
+  assert.equal(spool(B).length, 0);
 });
 
 test("a changed key is refused on both sides until the owner repins", async () => {

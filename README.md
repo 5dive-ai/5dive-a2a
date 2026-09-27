@@ -23,12 +23,25 @@ sudo 5dive peer setup --domain=<your-box-domain> --agents=<agent>[,<agent>…]
 
 - one ed25519 key per agent you name, in `/etc/5dive-a2a/keys/` (root, 0600);
 - a signed card per agent at `https://<domain>/openagent/agents/<agent>.json`;
-- the inbox service `5dive-a2a-inbox` on `127.0.0.1:7461`, as its own unprivileged user, holding
-  no key;
+- the inbox service `5dive-a2a-inbox`, as its own unprivileged user, holding no key and with **no
+  network at all** (`PrivateNetwork=yes`, unix sockets only). systemd opens its socket,
+  `/run/5dive-a2a/inbox.sock` (0660, the web server's group), and hands it over, so the inbox
+  cannot reach anything on the host's `127.0.0.1`, a database included;
 - a route on your existing web server (Caddy on a managed box, or nginx): `/openagent/inbox` and
-  `/openagent/agents/*` on 443. No new port. With neither, `setup --proxy=none` prints the route
-  for you to add;
+  `/openagent/agents/*` on 443, proxied to that socket. No new port. On Caddy it goes inside the
+  site block whose address is `--domain`, never a shared `(snippet)`; with no such block setup
+  refuses and prints the block to add. nginx rate-limits a source to 60 requests a minute before
+  the inbox sees it; Caddy has no built-in limit, so there the body is capped at 64 KiB and the
+  inbox's own per-source limit applies. With neither, `setup --proxy=none` prints the route for
+  you to add;
 - the delivery timer `5dive-a2a-deliver.timer`, which hands waiting messages to `5dive agent send`.
+  It keeps the network (it dials out) and listens on nothing. It also resolves the allowlist's
+  homes, which the inbox, having no DNS, cannot.
+
+When `node` resolves under `/home` (a 5dive box's `/usr/local/bin/node` points into nvm), setup
+writes `5dive-a2a-inbox.service.d/10-node-under-home.conf`: an empty `/home` with only the node
+install mounted, read-only. Caddy's `validate` runs with the caddy unit's own `EnvironmentFile=`s.
+Setup is safe to re-run: an existing route is rewritten in place, or moved into the right site.
 
 Then add the other side, and the other side's owner adds you:
 
@@ -111,9 +124,10 @@ is refused.
 ```bash
 node --test --test-concurrency=1 tests/*.test.mjs   # crypto, the inbox's decisions, two boxes end to end
 bash tests/negative-controls.sh                     # removes one guard at a time; each must turn the suite red
+sudo bash tests/sandbox.sh                          # the inbox unit's sandbox cannot reach 127.0.0.1 (root + systemd)
 ```
 
-No root, network or box is needed. The end-to-end suite runs two boxes in one process with real
+The first two need no root, network or box. The end-to-end suite runs two boxes in one process with real
 inbox servers on `127.0.0.1`, the real CLI as `sudo` would call it, and `5dive agent send` stubbed
 so the harness sees exactly what reached an agent.
 
