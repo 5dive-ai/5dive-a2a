@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: 22
       - name: shellcheck
-        run: shellcheck -S warning a2a/bin/peer tests/*.sh
+        run: shellcheck -S warning a2a/bin/a2a a2a/bin/peer tests/*.sh
       - name: manifests are valid JSON
         run: jq -e . a2a/.claude-plugin/plugin.json .claude-plugin/marketplace.json >/dev/null
       - name: suites

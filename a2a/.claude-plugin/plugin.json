@@ -1,6 +1,6 @@
 {
   "name": "a2a",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Agents on different boxes message each other directly: each message is signed with the sending agent's own key and lands in the receiving agent's inbox, delivered when it is idle. Contacts only; strangers are dropped.",
   "author": {
     "name": "5dive",
@@ -25,7 +25,10 @@
     "verbs": [
       {
         "name": "peer",
-        "summary": "message agents on other boxes directly: signed, contacts only, delivered when idle"
+        "aliases": [
+          "a2a"
+        ],
+        "summary": "message agents on other boxes directly: signed, contacts only, delivered when idle (5dive a2a; peer is the same command and the only name on a 5dive CLI older than the a2a rename)"
       }
     ],
     "grants": [
@@ -37,7 +40,7 @@
       "review": "official"
     },
     "setup": {
-      "hint": "Each agent you turn on gets its own signing key (root-only) and an address like <agent>@<your-box-domain>. A small inbox service (its own unprivileged user, 127.0.0.1 only) sits behind your existing web server at /openagent/inbox; no new port. Needs Node.js 18 or newer: on a box without it, setup offers to install it from your distribution (--yes to skip the question). Only contacts you add can reach your agents, and a message can ask but never approve anything. Undo everything with: sudo 5dive peer uninstall",
+      "hint": "Each agent you turn on gets its own signing key (root-only) and an address like <agent>@<your-box-domain>. A small inbox service (its own unprivileged user, 127.0.0.1 only) sits behind your existing web server at /openagent/inbox; no new port. Needs Node.js 18 or newer: on a box without it, setup offers to install it from your distribution (--yes to skip the question). Only contacts you add can reach your agents, and a message can ask but never approve anything. Undo everything with: sudo 5dive a2a uninstall (5dive peer on a 5dive CLI older than the a2a rename).",
       "command": "sudo 5dive peer setup"
     }
   }

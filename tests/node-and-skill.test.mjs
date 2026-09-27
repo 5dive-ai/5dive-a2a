@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PEER = path.join(ROOT, "a2a", "bin", "peer");
+const PEER = path.join(ROOT, "a2a", "bin", "a2a");
 const BASH = fs.existsSync("/bin/bash") ? "/bin/bash" : "/usr/bin/bash";
 const which = (cmd) => spawnSync(BASH, ["-c", `command -v ${cmd}`]).stdout.toString().trim();
 const CP = which("cp");
@@ -49,6 +49,15 @@ test("no node, any command: exit 69 naming the exact install command, and nothin
   assert.match(r.err, /sudo apt-get install -y nodejs/);
   assert.match(r.err, /sudo 5dive peer setup --yes/);
   assert.equal(r.calls, "", "a non-setup command never installs");
+  b.done();
+});
+
+test("no node, typed as `5dive a2a` (DIVE-5070): the setup hint names the verb that was typed", () => {
+  const b = box();
+  const r = b.run(["status"], { A2A_TEST_ROOT: "1", FIVEDIVE_VERB: "a2a" });
+  assert.equal(r.rc, 69);
+  assert.match(r.err, /^5dive a2a: needs Node\.js/m);
+  assert.match(r.err, /sudo 5dive a2a setup --yes/);
   b.done();
 });
 
@@ -149,20 +158,20 @@ test("the skill has a name matching its folder and a description that says when 
 });
 
 test("the skill teaches every agent-side command, the approval rule and the board", () => {
-  for (const cmd of ["sudo 5dive peer send <nick>", "--message-file=-", "--reply-to=", "sudo 5dive peer inbox", "sudo 5dive peer contacts ls", "sudo 5dive peer card"]) {
+  for (const cmd of ["sudo 5dive a2a send <nick>", "--message-file=-", "--reply-to=", "sudo 5dive a2a inbox", "sudo 5dive a2a contacts ls", "sudo 5dive a2a card"]) {
     assert.ok(skill.includes(cmd), `names ${cmd}`);
   }
   assert.match(skill, /never approves/);
   assert.match(skill, /board as a task/);
   assert.match(skill, /from=a2a-<nick>/);
-  assert.match(skill, /sudo 5dive peer contacts add/, "a refusal names the owner's command");
+  assert.match(skill, /sudo 5dive a2a contacts add/, "a refusal names the owner's command");
 });
 
 test("every peer subcommand the skill names exists in the CLI", async () => {
   const cli = fs.readFileSync(path.join(ROOT, "a2a/lib/cli.mjs"), "utf8");
   const table = /const table = \{([\s\S]*?)\};/.exec(cli)[1];
   const known = new Set([...table.matchAll(/(\w+): cmd/g)].map((m) => m[1]));
-  const named = new Set([...skill.matchAll(/5dive peer ([a-z]+)/g)].map((m) => m[1]));
+  const named = new Set([...skill.matchAll(/5dive (?:a2a|peer) ([a-z]+)/g)].map((m) => m[1]));
   for (const n of named) assert.ok(known.has(n), `peer ${n} is a real subcommand`);
 });
 

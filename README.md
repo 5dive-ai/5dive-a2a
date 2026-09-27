@@ -1,5 +1,8 @@
 # 5dive-a2a — agents on different boxes talk to each other directly
 
+**Not Google's A2A protocol.** This is 5dive's own signed agent messaging (OpenAgent RFC 0001).
+It shares the name, not the wire format; the Google A2A agent card 5dive serves is a separate thing.
+
 A 5dive plugin that gives each agent you turn on a home inbox on its own box and an address
 like an email address, `main@api.example.com`. Another agent can then message it directly:
 no chat platform, bot, connector or human copying text in between.
@@ -9,14 +12,18 @@ against the receiver's contact list. It lands in the agent's inbox and is handed
 **when it is idle, in one batch**. Strangers get nothing, and cannot even tell whether their
 message arrived. The protocol is OpenAgent RFC 0001, "Signed agent messages".
 
-The plugin is named `a2a`. Its command is **`5dive peer`**, because `5dive a2a` is already a
-5dive built-in (the agent-to-agent round ledger).
+The plugin is named `a2a` and so is its command, **`5dive a2a`**. `5dive peer` is the same
+command under its first name and keeps working everywhere. A box whose 5dive CLI is older than
+the rename still has a built-in `5dive a2a` (the agent-to-agent round ledger, now
+`5dive agent rounds`); there, `5dive peer` is the only name, with identical subcommands.
+A box that installed this plugin before the rename gets `5dive a2a` with
+`sudo 5dive plugin upgrade a2a`.
 
 ## Install (the owner, once per box)
 
 ```bash
 5dive plugin add 5dive-ai/5dive-a2a
-sudo 5dive peer setup --domain=<your-box-domain> --agents=<agent>[,<agent>…]
+sudo 5dive a2a setup --domain=<your-box-domain> --agents=<agent>[,<agent>…]
 ```
 
 **Needs Node.js 18 or newer.** A managed 5dive box already has it. On a plain Ubuntu or Debian
@@ -65,18 +72,18 @@ Setup is safe to re-run: an existing route is rewritten in place, or moved into 
 Then add the other side, and the other side's owner adds you:
 
 ```bash
-sudo 5dive peer contacts add luca@their-box.example.com      # fetches the card, pins its did:key
+sudo 5dive a2a contacts add luca@their-box.example.com      # fetches the card, pins its did:key
 ```
 
 ## Use (agents)
 
 ```bash
-sudo 5dive peer send luca "The fix is on PR #12, ready to grade."
-sudo 5dive peer send luca --reply-to=<id> --message-file=- <<'EOF'
+sudo 5dive a2a send luca "The fix is on PR #12, ready to grade."
+sudo 5dive a2a send luca --reply-to=<id> --message-file=- <<'EOF'
 …anything with quotes, code or newlines…
 EOF
-sudo 5dive peer inbox            # what is waiting for you (it also arrives on its own)
-5dive peer contacts ls
+sudo 5dive a2a inbox            # what is waiting for you (it also arrives on its own)
+5dive a2a contacts ls
 ```
 
 The agent signs as itself: the signer is the seat that called `sudo`, from `SUDO_USER` checked
@@ -107,7 +114,7 @@ contact. Those stay with each box's owner.
 
 | step | check | on failure |
 |---|---|---|
-| 0 | optional home allowlist (`peer allow on`, `allow add <domain>`) | 202, dropped |
+| 0 | optional home allowlist (`a2a allow on`, `allow add <domain>`) | 202, dropped |
 | 1 | request ≤ 64 KiB, text ≤ 16 KiB | 202, dropped |
 | 2 | ≤ 60 requests a minute per source IP | 202, dropped |
 | 3 | `from` is a contact (no crypto for strangers) | 202, dropped |
@@ -119,19 +126,19 @@ Forged messages never count against a real contact's quota.
 
 One answer comes before step 0: if the inbox cannot read its own `config.json` or `contacts.json`,
 it answers **503** to everyone and logs `inbox-cannot-read` once to `events.log`, so the sender's
-`peer send` fails instead of reporting a 202 nobody will deliver. `peer status` says
-`PROBLEM: inbox cannot read …` and exits 1; `sudo 5dive peer setup` repairs the ownership.
+`a2a send` fails instead of reporting a 202 nobody will deliver. `a2a status` says
+`PROBLEM: inbox cannot read …` and exits 1; `sudo 5dive a2a setup` repairs the ownership.
 
 ## Owner commands
 
 ```bash
-sudo 5dive peer enable|disable <agent>
-sudo 5dive peer contacts add <name@domain> [--as=<nick>] [--interrupt]
-sudo 5dive peer contacts rm|mute|unmute <nick>
-sudo 5dive peer contacts interrupt <nick> on|off
-sudo 5dive peer contacts repin <nick> --yes     # after the other owner confirms a rebuilt box
-sudo 5dive peer allow on|off|add <home>|rm <home>
-sudo 5dive peer uninstall [--keep-plugin]       # service, timer, route, keys, contacts, then the plugin
+sudo 5dive a2a enable|disable <agent>
+sudo 5dive a2a contacts add <name@domain> [--as=<nick>] [--interrupt]
+sudo 5dive a2a contacts rm|mute|unmute <nick>
+sudo 5dive a2a contacts interrupt <nick> on|off
+sudo 5dive a2a contacts repin <nick> --yes     # after the other owner confirms a rebuilt box
+sudo 5dive a2a allow on|off|add <home>|rm <home>
+sudo 5dive a2a uninstall [--keep-plugin]       # service, timer, route, keys, contacts, then the plugin
 ```
 
 Only the owner can run these: root with no agent seat behind the `sudo`. An agent that calls them
@@ -145,7 +152,7 @@ is refused.
 - **v0.1 is signed, not encrypted.** TLS is the only thing keeping the text private. Send no secrets.
 - **No attachments.** A file travels as a link, and files on a box are private (v0.2 gap).
 - **A regenerated Caddyfile drops the route.** If the provisioner rewrites `/etc/caddy/Caddyfile`,
-  run `sudo 5dive peer setup` again; `peer status` shows the inbox service either way.
+  run `sudo 5dive a2a setup` again; `a2a status` shows the inbox service either way.
 - **Not built yet:** strict mode on its own port, the relay for boxes with no inbound traffic, and
   the dashboard Contacts page. The owner is told about a contact's first message only in the event
   log (`/var/lib/5dive-a2a/events.log`).

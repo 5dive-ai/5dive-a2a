@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# `5dive a2a` (plugin a2a; `5dive peer` is the same thing): agents on different boxes message
+# each other directly, signed with each agent's own key (OpenAgent RFC 0001). DIVE-5000.
+#
+# 5dive finds this file by convention (<installed-plugin-dir>/bin/<verb>, plugin
+# contract §2.1); bin/peer is a two-line wrapper around it. `plugin add` never runs
+# publisher code (contract §6), so the host half (the inbox service, its web route and
+# the delivery timer) runs when the owner types `sudo 5dive a2a setup`. Everything lives
+# in lib/cli.mjs.
+#
+# DIVE-5070: the manifest declares `peer` with the alias `a2a`. A 5dive CLI older than
+# verb aliases reads only `peer` (it still owned `a2a` as a builtin) and installs the
+# plugin under that name; a newer one dispatches both. Text here names the verb the
+# caller typed, so it is always one that works on this box.
+set -uo pipefail
+verb="${FIVEDIVE_VERB:-peer}"; [[ "$verb" == a2a ]] || verb=peer
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cli="$(cd "$self_dir/../lib" 2>/dev/null && pwd)/cli.mjs"
+[[ -r "$cli" ]] || { printf '5dive %s: this plugin is incomplete (no %s). Reinstall it: sudo 5dive plugin upgrade a2a\n' "$verb" "$cli" >&2; exit 1; }
+
+# DIVE-5065: a plain Ubuntu box has no node at all (a managed box carries one under nvm), so
+# `plugin add` succeeded and `setup` then failed. setup installs it from the distribution
+# when the owner says yes (at the prompt, or with --yes); every other path names the command.
+NODE_MIN=18
+node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null; }
+node_ok() { local m; m="$(node_major)"; [[ "$m" =~ ^[0-9]+$ ]] && (( m >= NODE_MIN )); }
+install_cmd() {
+  if command -v apt-get >/dev/null 2>&1; then printf 'apt-get install -y nodejs'
+  elif command -v dnf >/dev/null 2>&1; then printf 'dnf install -y nodejs'
+  fi
+}
+# The test seam is honoured only for a non-root caller, like the CLI's own (lib/cli.mjs).
+is_root() { [[ "$EUID" -eq 0 || "${A2A_TEST_ROOT:-}" == 1 ]]; }
+
+if ! node_ok; then
+  have="$(node_major)"
+  pm="$(install_cmd)"
+  if [[ "${1:-}" == setup && -z "$have" && -n "$pm" ]] && is_root; then
+    yes=0
+    for a in "$@"; do [[ "$a" == --yes ]] && yes=1; done
+    if (( !yes )) && [[ -t 0 ]]; then
+      read -r -p "5dive $verb setup needs Node.js $NODE_MIN or newer and this box has none. Install it now ($pm)? [y/N] " ans
+      [[ "$ans" =~ ^[Yy] ]] && yes=1
+    fi
+    if (( yes )); then
+      printf '5dive %s: installing Node.js: %s\n' "$verb" "$pm" >&2
+      if [[ "$pm" == apt-get* ]]; then DEBIAN_FRONTEND=noninteractive apt-get update -qq >&2; fi
+      # shellcheck disable=SC2086 # $pm is one of the two literal commands above
+      DEBIAN_FRONTEND=noninteractive $pm >&2 || printf '5dive %s: %s failed\n' "$verb" "$pm" >&2
+      hash -r
+      have="$(node_major)"
+    fi
+  fi
+  if ! node_ok; then
+    if [[ -z "$have" ]]; then
+      printf '5dive %s: needs Node.js %s or newer on the box (node was not found).\n' "$verb" "$NODE_MIN" >&2
+      if [[ -n "$pm" ]]; then
+        printf 'Install it with: sudo %s\nor let setup do it: sudo 5dive %s setup --yes …\n' "$pm" "$verb" >&2
+      else
+        printf 'Install it from https://nodejs.org/en/download, then re-run this command.\n' >&2
+      fi
+    else
+      printf '5dive %s: needs Node.js %s or newer on the box (found %s). Your distribution'"'"'s package is too old: install a current one from https://nodejs.org/en/download (NodeSource or nvm), then re-run this command.\n' "$verb" "$NODE_MIN" "$have" >&2
+    fi
+    exit 69
+  fi
+fi
+exec node "$cli" "$@"
