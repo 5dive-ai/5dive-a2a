@@ -46,11 +46,44 @@ export function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; }
 }
 
-// Atomic write: temp file in the same directory, then rename.
-export function writeJson(file, value, mode = 0o640) {
+// readJson for the inbox's trust root: a MISSING file is the fallback, but one that is
+// there and cannot be read (EACCES, a torn write) throws. Treating it as empty turned
+// every contact into a stranger, silently (DIVE-5064).
+export function readJsonStrict(file, fallback) {
+  let text;
+  try { text = fs.readFileSync(file, "utf8"); } catch (e) {
+    if (e && e.code === "ENOENT") return fallback;
+    throw Object.assign(new Error(`cannot read ${file}: ${e && e.code}`), { file, code: e && e.code });
+  }
+  try { return JSON.parse(text); } catch { throw Object.assign(new Error(`cannot parse ${file}`), { file, code: "EPARSE" }); }
+}
+
+// Atomic write: temp file in the same directory, then rename. The rename puts a NEW
+// inode in place, owned by whoever wrote it, so the temp file first takes the owner of
+// the file it replaces (or `owner`, {uid, gid}): root rewriting contacts.json must not
+// take it away from the inbox's group (DIVE-5064).
+export function writeJson(file, value, mode = 0o640, owner) {
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode });
+  if (!owner) { try { const st = fs.statSync(file); owner = { uid: st.uid, gid: st.gid }; } catch { /* a new file */ } }
+  const fd = fs.openSync(tmp, "w", mode);
+  try {
+    fs.writeSync(fd, JSON.stringify(value, null, 2) + "\n");
+    if (owner) {
+      try { fs.fchownSync(fd, owner.uid, owner.gid); } catch (e) {
+        // Only root can give a file away; a non-root writer (the inbox, the tests) keeps its own.
+        if (isRoot() || !e || e.code !== "EPERM") throw e;
+      }
+    }
+  } catch (e) { fs.closeSync(fd); fs.rmSync(tmp, { force: true }); throw e; }
+  fs.closeSync(fd);
   fs.renameSync(tmp, file);
+}
+
+// config.json and contacts.json take the owner of /etc/5dive-a2a (root:5dive-a2a once
+// `peer setup` installed the service), so a write also heals a file an older version
+// left root:root.
+export function etcOwner(p = paths()) {
+  try { const st = fs.statSync(p.etc); return { uid: st.uid, gid: st.gid }; } catch { return undefined; }
 }
 
 export function appendLog(file, obj) {
@@ -67,7 +100,11 @@ export function loadContacts(p = paths()) {
 }
 
 export function saveContacts(list, p = paths()) {
-  writeJson(p.contacts, { contacts: list }, 0o640);
+  writeJson(p.contacts, { contacts: list }, 0o640, etcOwner(p));
+}
+
+export function saveConfig(config, p = paths()) {
+  writeJson(p.config, config, 0o640, etcOwner(p));
 }
 
 // The inbox's store: seen ids and counts persist across restarts, the per-IP

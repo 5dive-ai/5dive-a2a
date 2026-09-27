@@ -18,7 +18,7 @@ import {
   CONTENT_TYPE, MAX_BODY_BYTES, generateKey, makeCard, verifyCard, parseAddress, cardUrl, shortDid,
   makeEnvelope, signEnvelope, ulid,
 } from "./core.mjs";
-import { paths, readJson, writeJson, appendLog, loadContacts, saveContacts, listSpool } from "./state.mjs";
+import { paths, readJson, writeJson, appendLog, loadContacts, saveContacts, saveConfig, listSpool } from "./state.mjs";
 
 const SELF_DIR = path.dirname(fileURLToPath(import.meta.url));
 const INSTALL_DIR = "/usr/local/lib/5dive-a2a";
@@ -509,20 +509,25 @@ function removeProxy(config) {
   } catch { /* nothing to undo */ }
 }
 
+// The inbox reads config, contacts and cards; it can never read keys. Exported for the
+// ownership arm (tests/ownership.sh), which runs it as root in a private mount namespace.
+export function ownTree(p, user = SVC_USER) {
+  sh("chown", ["root:" + user, p.etc, p.config, p.contacts]);
+  fs.chmodSync(p.etc, 0o750); fs.chmodSync(p.config, 0o640); fs.chmodSync(p.contacts, 0o640);
+  sh("chown", ["-R", "root:root", p.keys]);
+  // Pre-create the event log as the inbox user: root's timer appends to it too, and a
+  // root-created file would silently stop the service from logging.
+  if (!fs.existsSync(p.events)) fs.writeFileSync(p.events, "", { mode: 0o640 });
+  sh("chown", ["-R", `${user}:${user}`, p.var]);
+}
+
 function installSystem(p, config, flags) {
   const notes = [];
   if (sh("id", ["-u", SVC_USER]).rc !== 0) {
     const r = sh("useradd", ["--system", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", SVC_USER]);
     if (r.rc !== 0) throw new Refusal(`could not create the ${SVC_USER} user: ${r.out}`);
   }
-  // The inbox reads config, contacts and cards; it can never read keys.
-  sh("chown", ["root:" + SVC_USER, p.etc, p.config, p.contacts]);
-  fs.chmodSync(p.etc, 0o750); fs.chmodSync(p.config, 0o640); fs.chmodSync(p.contacts, 0o640);
-  sh("chown", ["-R", "root:root", p.keys]);
-  // Pre-create the event log as the inbox user: root's timer appends to it too, and a
-  // root-created file would silently stop the service from logging.
-  if (!fs.existsSync(p.events)) fs.writeFileSync(p.events, "", { mode: 0o640 });
-  sh("chown", ["-R", `${SVC_USER}:${SVC_USER}`, p.var]);
+  ownTree(p);
   fs.mkdirSync(INSTALL_DIR, { recursive: true, mode: 0o755 });
   for (const f of ["core.mjs", "receiver.mjs", "state.mjs", "server.mjs", "cli.mjs"]) fs.copyFileSync(path.join(SELF_DIR, f), path.join(INSTALL_DIR, f));
   const node = resolveNode(sh("sh", ["-c", "command -v node"]).out.trim());
@@ -570,14 +575,14 @@ function cmdSetup({ flags }) {
   if (!config.domain) throw new Refusal("5dive peer setup: could not tell this box's domain. Pass it: sudo 5dive peer setup --domain=<box-domain>");
   config.inbox_url = flags["inbox-url"] || config.inbox_url || `https://${config.domain}/openagent/inbox`;
   config.allowlist ||= { enabled: false, homes: [] };
-  writeJson(p.config, config);
+  saveConfig(config, p);
   const enabled = [];
   for (const a of String(flags.agents || "").split(",").map((s) => s.trim()).filter(Boolean)) enabled.push(`${a}@${config.domain}  ${enableAgent(p, config, a)}`);
   // Cards carry the inbox URL, so re-sign every enabled agent's card.
   for (const [a, v] of Object.entries(config.agents)) if (v.inbox) writeCard(p, config, a);
-  writeJson(p.config, config);
+  saveConfig(config, p);
   const notes = flags["no-system"] ? ["--no-system: files only, no service, user or web route"] : installSystem(p, config, flags);
-  writeJson(p.config, config);
+  saveConfig(config, p);
   out([
     `5dive peer is set up for ${config.domain}. Inbox: ${config.inbox_url}`,
     ...(enabled.length ? ["Agents with an inbox:", ...enabled.map((e) => "  " + e)] : ["No agent has an inbox yet. Turn one on: sudo 5dive peer enable <agent>"]),
@@ -592,7 +597,7 @@ function cmdEnable({ pos }) {
   const config = mustConfig(p);
   if (!pos[0]) throw new Refusal("usage: sudo 5dive peer enable <agent>", 64);
   const did = enableAgent(p, config, pos[0]);
-  writeJson(p.config, config);
+  saveConfig(config, p);
   out(`${pos[0]}@${config.domain} has an inbox. Its address: ${pos[0]}@${config.domain}\n  ${did}`, { ok: true, agent: pos[0], did });
 }
 
@@ -604,7 +609,7 @@ function cmdDisable({ pos }) {
   if (!a || !config.agents[a]) throw new Refusal("usage: sudo 5dive peer disable <agent-with-an-inbox>", 64);
   config.agents[a].inbox = false;
   fs.rmSync(path.join(p.cards, `${a}.json`), { force: true });
-  writeJson(p.config, config);
+  saveConfig(config, p);
   out(`${a}: inbox off, card withdrawn (its key is kept; enable brings the same address back)`, { ok: true, agent: a });
 }
 
@@ -717,7 +722,7 @@ async function cmdAllow({ pos }) {
   else if (sub === "add" && pos[1]) { if (!al.homes.includes(pos[1])) al.homes.push(pos[1].toLowerCase()); }
   else if (sub === "rm" && pos[1]) al.homes = al.homes.filter((h) => h !== pos[1]);
   else if (sub !== "ls") throw new Refusal("usage: sudo 5dive peer allow on|off|add <home>|rm <home>|ls", 64);
-  if (sub !== "ls") { writeJson(p.config, config); await refreshAllow(p, config, { force: true }); }
+  if (sub !== "ls") { saveConfig(config, p); await refreshAllow(p, config, { force: true }); }
   out(`home allowlist: ${al.enabled ? "ON" : "off"}; homes: ${al.homes.join(", ") || "(none)"}` +
     (al.enabled && !al.homes.length ? "\nWARNING: on with no homes, so every message is refused." : ""), { allowlist: al });
 }
@@ -799,11 +804,22 @@ function cmdStatus() {
   const contacts = loadContacts(p);
   const agents = Object.entries(config.agents || {}).filter(([, v]) => v.inbox).map(([k, v]) => ({ address: `${k}@${config.domain}`, did: v.did }));
   const waiting = listSpool(p).length;
+  const unreadable = inboxUnreadable(p);
   out([
     `domain ${config.domain}   inbox ${config.inbox_url}   service ${active}   delivery ${timer}`,
     `agents with an inbox: ${agents.map((a) => a.address).join(", ") || "none"}`,
     `contacts: ${contacts.length}   waiting: ${waiting}   allowlist: ${config.allowlist && config.allowlist.enabled ? "on" : "off"}`,
-  ].join("\n"), { setup: true, domain: config.domain, inbox: config.inbox_url, service: active, delivery: timer, agents, contacts: contacts.length, waiting });
+    ...(unreadable.length ? [`PROBLEM: inbox cannot read ${unreadable.map((f) => path.basename(f)).join(" and ")}: it refuses every message (503) until repaired. Repair: sudo 5dive peer setup`] : []),
+  ].join("\n"), { setup: true, domain: config.domain, inbox: config.inbox_url, service: active, delivery: timer, agents, contacts: contacts.length, waiting, inbox_cannot_read: unreadable });
+  if (unreadable.length) process.exitCode = 1;
+}
+
+// The files the inbox user cannot read, measured AS that user (the kernel's answer, dir
+// traversal included), not from the mode bits. Only on a system install: with
+// --no-system there is no such user and nothing to measure (DIVE-5064).
+export function inboxUnreadable(p, user = SVC_USER) {
+  if (!realRoot() || sh("id", ["-u", user]).rc !== 0) return [];
+  return [p.config, p.contacts].filter((f) => fs.existsSync(f) && sh("runuser", ["-u", user, "--", "test", "-r", f]).rc !== 0);
 }
 
 function cmdCard({ pos }) {

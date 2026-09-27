@@ -43,6 +43,11 @@ mutate "caddy markers found anywhere are kept"    a2a/lib/cli.mjs      's/if \(b
 mutate "caddy validate ignores EnvironmentFiles"  a2a/lib/cli.mjs      's/try \{ Object\.assign\(env, parseEnvFile\(read\(m\[1\]\)\)\); \}/try { }/'
 mutate "inbox ignores the resolved allowlist"     a2a/lib/server.mjs   's/allow = al && al\.enabled \? /allow = false ? /'
 mutate "unix-socket peer cannot name the client"  a2a/lib/server.mjs   's/const loop = !peer \|\| /const loop = /'
+mutate "inbox reads unreadable contacts as empty" a2a/lib/server.mjs   's/const doc = readJsonStrict\(p\.contacts, /const doc = readJson(p.contacts, /'
+mutate "inbox reads unreadable config as empty"   a2a/lib/server.mjs   's/const config = readJsonStrict\(p\.config, /const config = readJson(p.config, /'
+mutate "unreadable trust root answers 202"        a2a/lib/server.mjs   's/if \(!ctx\) \{ res\.writeHead\(503/if (false) { res.writeHead(503/'
+mutate "refresh stamp is the mtime only"          a2a/lib/server.mjs   's/return `\$\{st\.ino\}\.\$\{st\.ctimeMs\}\.\$\{st\.mtimeMs\}`;/return st.mtimeMs;/'
+mutate "unreadable is logged on every message"    a2a/lib/server.mjs   's/ctx = null; allow = null; stamp = s;\n(\s*)if \(e\.message !== broken\) store\.log/ctx = null; allow = null;\n$1store.log/'
 
 printf '\n%d mutations, %d red as required, %d failures\n' "$n" "$((n - fail))" "$fail"
 exit $((fail > 0))
