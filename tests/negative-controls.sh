@@ -33,6 +33,7 @@ mutate "SUDO_UID cross-check removed"             a2a/lib/cli.mjs      's/if \(b
 mutate "a seat passes as the owner"               a2a/lib/cli.mjs      's/if \(c\.kind !== "owner"\) \{\n    throw new Refusal\(`5dive \$\{VERB\} \$\{what\}/if (false) {\n    throw new Refusal(`5dive \${VERB} \${what}/'
 mutate "the dashboard is not the owner (5073)"      a2a/lib/cli.mjs      's/return cg === "\/system\.slice\/shelld\.service" \|\| /return /'
 mutate "any cgroup passes as the owner (5073)"      a2a/lib/cli.mjs      's/if \(!cg\) return false;\n  return /return true || /'
+mutate "a user-manager scope passes as a login (5073)" a2a/lib/cli.mjs  's/\\\/user\\\.slice\\\/user-\\d\+\\\.slice\\\/session-/\\\/user\\\.slice\\\/.+\\\/session-/'
 mutate "fresh setup ignores the box domain (5073)"  a2a/lib/cli.mjs      's/const d = provisionedDomain\(/const d = null \&\& provisionedDomain(/'
 mutate "no debounce before delivery"              a2a/lib/cli.mjs      's/if \(!interrupt && now - items\[0\]\.rec\.received_at < DEBOUNCE_MS\)/if (false)/'
 mutate "send to a non-contact"                    a2a/lib/cli.mjs      's/if \(!contact\) throw new Refusal\(`.\$\{target/if (false) throw new Refusal(`\${target/'

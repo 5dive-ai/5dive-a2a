@@ -41,6 +41,9 @@ test("ownerSurface: the dashboard and a login session are the owner; every agent
     agentUnitPath("claude"),
     "/system.slice/claude.service",
     "/user.slice/user-1000.slice/" + at("user", "1000") + ".service/app.slice/x.service",
+    // Any user can create this one with `systemd-run --user --scope --unit=session-x`: not a login.
+    "/user.slice/user-1000.slice/" + at("user", "1000") + ".service/app.slice/session-x.scope",
+    "/user.slice/user-1000.slice/" + at("user", "1000") + ".service/session-x.scope",
     "/system.slice/shelld.service/child",
     "/system.slice/notshelld.service",
     "/",

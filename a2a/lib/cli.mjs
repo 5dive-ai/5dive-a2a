@@ -115,9 +115,13 @@ function caller() {
 // inside its own unit (system-5dive\x2dagent.slice/5dive-agent@<name>.service, or the primary
 // runtime's), and neither sudo nor runuser moves a process to another cgroup. This is the
 // predicate the 5dive CLI already clears human gates with (_gate_cgroup_human_capable,
-// src/lib/tasks_db.sh), copied rather than called so it works on any 5dive CLI:
+// src/lib/tasks_db.sh), copied rather than called so it works on any 5dive CLI, and tightened (see below):
 //   /system.slice/shelld.service         the dashboard (its buttons and its terminal)
-//   /user.slice/…/session-<n>.scope      a person who logged in over ssh and typed sudo
+//   /user.slice/user-<uid>.slice/session-<n>.scope   a person who logged in over ssh and typed sudo
+// The session scope must sit DIRECTLY under user-<uid>.slice, where only logind (root) can put
+// one. Any user can name a scope `session-x.scope` under their own systemd --user manager
+// (…/user@<uid>.service/app.slice/session-x.scope, measured as claude with no privilege), so a
+// looser match would let an agent running as claude pass as a login.
 // Hardcoded, with no environment override at real root: a knob on a fail-closed accept list is
 // a way for an agent to name its own cgroup. An unreadable or unrecognised cgroup is not the owner.
 export function cgroupPath(text) {
@@ -132,7 +136,7 @@ export function cgroupPath(text) {
 
 export function ownerSurface(cg) {
   if (!cg) return false;
-  return cg === "/system.slice/shelld.service" || /^\/user\.slice\/.+\/session-[^/]+\.scope$/.test(cg);
+  return cg === "/system.slice/shelld.service" || /^\/user\.slice\/user-\d+\.slice\/session-[^/]+\.scope$/.test(cg);
 }
 
 function callerCgroup() {
