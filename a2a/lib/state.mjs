@@ -1,11 +1,13 @@
 // Where 5dive-a2a keeps things, and the file-backed store the inbox uses.
 //
-//   /etc/5dive/a2a/            root:5dive-a2a 0750
+//   /etc/5dive-a2a/            root:5dive-a2a 0750 — its OWN top-level dir: /etc/5dive is
+//                              0750 root:claude on a 5dive host, so the inbox user could not traverse it
 //     config.json              domain, inbox url, port, which agents are on, allowlist
 //     contacts.json            root:5dive-a2a 0640 — the trust root; only the owner writes it
 //     keys/<agent>.key         root:root 0600 — never readable by the inbox service or a seat
 //     cards/<agent>.json       0644 — the signed card, served at /openagent/agents/<agent>.json
-//   /var/lib/5dive/a2a/        5dive-a2a 0750 — written by the inbox service
+//   /var/lib/5dive-a2a/        5dive-a2a 0750 — written by the inbox service (not under
+//                              /var/lib/5dive, which is 2750 root:claude)
 //     spool/<id>.json          verified messages waiting for delivery
 //     seen.json                message ids until they expire (replay guard)
 //     counts.json              verified-message times per contact (last hour)
@@ -21,8 +23,8 @@ import path from "node:path";
 const isRoot = () => typeof process.geteuid === "function" && process.geteuid() === 0;
 
 export function paths() {
-  const etc = (!isRoot() && process.env.A2A_ETC) || "/etc/5dive/a2a";
-  const v = (!isRoot() && process.env.A2A_VAR) || "/var/lib/5dive/a2a";
+  const etc = (!isRoot() && process.env.A2A_ETC) || "/etc/5dive-a2a";
+  const v = (!isRoot() && process.env.A2A_VAR) || "/var/lib/5dive-a2a";
   return {
     etc, var: v,
     config: path.join(etc, "config.json"),

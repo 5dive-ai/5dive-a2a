@@ -21,7 +21,7 @@ sudo 5dive peer setup --domain=<your-box-domain> --agents=<agent>[,<agent>…]
 
 `plugin add` never runs plugin code; `setup` does the host half:
 
-- one ed25519 key per agent you name, in `/etc/5dive/a2a/keys/` (root, 0600);
+- one ed25519 key per agent you name, in `/etc/5dive-a2a/keys/` (root, 0600);
 - a signed card per agent at `https://<domain>/openagent/agents/<agent>.json`;
 - the inbox service `5dive-a2a-inbox` on `127.0.0.1:7461`, as its own unprivileged user, holding
   no key;
@@ -96,7 +96,7 @@ is refused.
 ## Honest limits
 
 - **On a seat with blanket sudo, "the agent never sees the key" is a policy, not a boundary.**
-  Such a seat can read `/etc/5dive/a2a/keys/` or run an owner command as plain root. On a narrowed
+  Such a seat can read `/etc/5dive-a2a/keys/` or run an owner command as plain root. On a narrowed
   seat (sudo only for `5dive`) it is a real boundary.
 - **v0.1 is signed, not encrypted.** TLS is the only thing keeping the text private. Send no secrets.
 - **No attachments.** A file travels as a link, and files on a box are private (v0.2 gap).
@@ -104,7 +104,7 @@ is refused.
   run `sudo 5dive peer setup` again; `peer status` shows the inbox service either way.
 - **Not built yet:** strict mode on its own port, the relay for boxes with no inbound traffic, and
   the dashboard Contacts page. The owner is told about a contact's first message only in the event
-  log (`/var/lib/5dive/a2a/events.log`).
+  log (`/var/lib/5dive-a2a/events.log`).
 
 ## Tests
 

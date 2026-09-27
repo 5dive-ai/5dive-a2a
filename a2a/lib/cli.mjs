@@ -178,9 +178,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/var/lib/5dive/a2a
-ReadOnlyPaths=/etc/5dive/a2a
-InaccessiblePaths=-/etc/5dive/a2a/keys
+ReadWritePaths=/var/lib/5dive-a2a
+ReadOnlyPaths=/etc/5dive-a2a
+InaccessiblePaths=-/etc/5dive-a2a/keys
 IPAddressAllow=any
 
 [Install]
@@ -340,6 +340,9 @@ function installSystem(p, config, flags) {
   sh("chown", ["root:" + SVC_USER, p.etc, p.config, p.contacts]);
   fs.chmodSync(p.etc, 0o750); fs.chmodSync(p.config, 0o640); fs.chmodSync(p.contacts, 0o640);
   sh("chown", ["-R", "root:root", p.keys]);
+  // Pre-create the event log as the inbox user: root's timer appends to it too, and a
+  // root-created file would silently stop the service from logging.
+  if (!fs.existsSync(p.events)) fs.writeFileSync(p.events, "", { mode: 0o640 });
   sh("chown", ["-R", `${SVC_USER}:${SVC_USER}`, p.var]);
   fs.mkdirSync(INSTALL_DIR, { recursive: true, mode: 0o755 });
   for (const f of ["core.mjs", "receiver.mjs", "state.mjs", "server.mjs", "cli.mjs"]) fs.copyFileSync(path.join(SELF_DIR, f), path.join(INSTALL_DIR, f));
@@ -350,6 +353,19 @@ function installSystem(p, config, flags) {
   const b = sh("systemctl", ["enable", "--now", UNIT_TIMER]);
   sh("systemctl", ["restart", UNIT_INBOX]);
   if (a.rc || b.rc) throw new Refusal(`systemd refused the units:\n${a.out}${b.out}`);
+  // Probe as the service sees it: an agent's card served by the running inbox proves the
+  // unprivileged user can reach its config tree. A unit that is "active" proves nothing.
+  const probe = Object.entries(config.agents).find(([, v]) => v.inbox);
+  if (probe) {
+    const url = `http://127.0.0.1:${config.port}/openagent/agents/${probe[0]}.json`;
+    let code = "";
+    for (let i = 0; i < 20 && code !== "200"; i++) {
+      code = sh("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", url]).out.trim();
+      if (code !== "200") sh("sleep", ["0.5"]);
+    }
+    if (code !== "200") throw new Refusal(`the inbox service is not serving ${url} (HTTP ${code || "none"}). Check: journalctl -u ${UNIT_INBOX} -n 50, and that ${SVC_USER} can read ${p.etc}`);
+    notes.push(`probe: ${url} -> 200 as ${SVC_USER}`);
+  }
   notes.push(`service: ${UNIT_INBOX} on 127.0.0.1:${config.port} as ${SVC_USER}; delivery timer every 20s`);
   notes.push(installProxy(config, flags));
   return notes;
@@ -637,7 +653,11 @@ export function tick({ now = Date.now(), send } = {}) {
     for (const x of items) {
       x.rec.delivered_to = [...(x.rec.delivered_to || []), agent];
       if (x.rec.to_agents.every((a) => x.rec.delivered_to.includes(a))) fs.rmSync(x.file, { force: true });
-      else writeJson(x.file, x.rec);
+      else {
+        writeJson(x.file, x.rec);
+        // Root rewrote it: hand it back to the inbox user, who counts the backlog from it.
+        try { const o = fs.statSync(p.spool); fs.chownSync(x.file, o.uid, o.gid); } catch { /* not root (tests) */ }
+      }
       if (!firsts.dids.includes(x.rec.from_did)) {
         firsts.dids.push(x.rec.from_did);
         // The owner is told about a contact's first message (no second OK is asked).
