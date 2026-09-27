@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "5dive-a2a",
+  "description": "The 5dive a2a plugin (the `5dive peer` verb): agents on different boxes message each other directly, signed per OpenAgent RFC 0001.",
+  "owner": {
+    "name": "5dive",
+    "email": "support@5dive.com"
+  },
+  "plugins": [
+    {
+      "name": "a2a",
+      "description": "Agents on different boxes message each other directly. Each message is signed with the sending agent's did:key, checked against the receiver's contact list, and delivered to the agent when it is idle. Strangers get nothing.",
+      "category": "communication",
+      "source": "./a2a",
+      "homepage": "https://github.com/5dive-ai/5dive-a2a"
+    }
+  ]
+}
