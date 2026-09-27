@@ -6,6 +6,8 @@
 //
 //   POST /openagent/inbox               -> receive() -> always 202, or 429 after verify
 //   GET  /openagent/agents/<name>.json  -> the signed card
+//   GET  /openagent/files/<token>/<name> -> a file an agent here sent, until it expires (DIVE-5071);
+//                                           an unknown, expired or revoked token is the same 404
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -72,6 +74,25 @@ export function createInbox({ p = paths(), store = fileStore(p), now = () => Dat
   };
   try { refresh(); } catch { /* the first request tries again */ }
 
+  // No listing, no hint: whatever is wrong with the token, the answer is the same bare 404.
+  const serveFile = (req, res, token, name) => {
+    const meta = readJson(path.join(p.files, `${token}.json`), null);
+    const disk = path.join(p.files, token, name);
+    let st = null;
+    try { st = meta && meta.name === name && meta.expires_at > now() ? fs.statSync(disk) : null; } catch { st = null; }
+    if (!st || !st.isFile()) { res.writeHead(404).end(); return; }
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-length": String(st.size),
+      "content-disposition": `attachment; filename="${name}"`,
+      "x-content-type-options": "nosniff",
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    });
+    if (req.method === "HEAD") { res.end(); return; }
+    fs.createReadStream(disk).on("error", () => res.destroy()).pipe(res);
+  };
+
   const server = http.createServer(async (req, res) => {
     const url = (req.url || "").split("?")[0];
     const card = /^\/openagent\/agents\/([a-z][a-z0-9-]{0,31})\.json$/.exec(url);
@@ -82,6 +103,8 @@ export function createInbox({ p = paths(), store = fileStore(p), now = () => Dat
       res.writeHead(200, { "content-type": "application/json", "cache-control": "max-age=300" }).end(body);
       return;
     }
+    const file = /^\/openagent\/files\/([0-9a-f]{32})\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(url);
+    if ((req.method === "GET" || req.method === "HEAD") && file) { serveFile(req, res, file[1], file[2]); return; }
     if (url !== "/openagent/inbox") { res.writeHead(404).end(); return; }
     if (req.method !== "POST") { res.writeHead(405, { allow: "POST" }).end(); return; }
 

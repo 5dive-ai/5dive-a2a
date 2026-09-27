@@ -60,6 +60,16 @@ mutate "the verb echoes any FIVEDIVE_VERB"         a2a/lib/cli.mjs      's/proce
 mutate "old CLIs see a2a as the verb name"         a2a/.claude-plugin/plugin.json 's/"name": "peer"/"name": "a2a"/'
 mutate "the timer forgets the verb"                a2a/lib/cli.mjs      's/^Environment=FIVEDIVE_VERB=\$\{VERB\}\n//m'
 mutate "bin/peer drops the typed verb"             a2a/bin/peer         's/exec /FIVEDIVE_VERB=peer exec /'
+mutate "a file link may point off the sender's box (5071)" a2a/lib/receiver.mjs 's/if \(env\.files && !env\.files\.every\(\(f\) => sameOrigin\(f\.url, contact\.inbox\)\)\) return/if (false) return/'
+mutate "file entries are not shape-checked (5071)"  a2a/lib/core.mjs     's/if \(env\.files !== undefined && /if (false \&\& /'
+mutate "an expired link is still served (5071)"     a2a/lib/server.mjs   's/meta\.name === name && meta\.expires_at > now\(\) \?/meta.name === name ?/'
+mutate "no per-file cap on a sent file (5071)"      a2a/lib/cli.mjs      's/if \(size > cap\) \{ over = true;/if (false) { over = true;/'
+mutate "the box total is not counted (5071)"        a2a/lib/cli.mjs      's/lim\.maxTotalBytes - used\)/lim.maxTotalBytes)/'
+mutate "a failed send keeps its files (5071)"       a2a/lib/cli.mjs      's/if \(status !== 202\) for \(const f of staged\) removeFile\(p, f\.token\);//'
+mutate "the tick never deletes expired files (5071)" a2a/lib/cli.mjs     's/const swept = sweepFiles\(p, now\);/const swept = [];/'
+mutate "the fetch line skips the sha256 (5071)"     a2a/lib/cli.mjs      's/ && echo \x27\$\{f\.sha256\}  \$\{out\}\x27 \| sha256sum -c -//'
+mutate "a seat sets the file caps (5071)"           a2a/lib/cli.mjs      's/requireOwner\("files limits"\);/caller();/'
+mutate "revoke leaves the link live (5071)"         a2a/lib/state.mjs    's/fs\.rmSync\(meta, \{ force: true \}\);\n  fs\.rmSync\(path\.join\(p\.files, token\)/fs.rmSync(path.join(p.files, token + "-gone")/'
 mutate "the skill drops the approval rule"        a2a/skills/message-agents/SKILL.md 's/never approves/can approve/'
 
 printf '\n%d mutations, %d red as required, %d failures\n' "$n" "$((n - fail))" "$fail"

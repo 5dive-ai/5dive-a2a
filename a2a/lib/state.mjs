@@ -14,6 +14,8 @@
 //     events.log               jsonl: skew, rate, backlog, first contact, delivery
 //     outbox.log               jsonl: what this box's agents sent (root writes)
 //     allow-ips.json           the allowlist's homes, resolved by root (the inbox has no network)
+//     files/<token>/<name>     a file an agent here sent as a link (DIVE-5071), 0640, root copies
+//     files/<token>.json       it in and the inbox serves it until `expires_at`; the tick deletes it
 //
 // Test seam: A2A_ETC and A2A_VAR move both trees, and are honoured ONLY in a
 // process that is not root. Through `sudo` they would be a way to point a
@@ -39,6 +41,7 @@ export function paths() {
     outbox: path.join(v, "outbox.log"),
     delivered: path.join(v, "delivered.json"),
     allowIps: path.join(v, "allow-ips.json"),
+    files: path.join(v, "files"),
   };
 }
 
@@ -158,4 +161,41 @@ export function listSpool(p = paths()) {
   return files.map((f) => ({ file: path.join(p.spool, f), rec: readJson(path.join(p.spool, f), null) }))
     .filter((x) => x.rec)
     .sort((a, b) => a.rec.received_at - b.rec.received_at);
+}
+
+// ---- sent files (DIVE-5071) ---------------------------------------------------------
+
+export const FILE_DEFAULTS = Object.freeze({ maxFileBytes: 100 * 1024 ** 2, maxTotalBytes: 1024 ** 3 });
+
+// Every file's metadata, newest last. A torn or foreign entry is skipped, never trusted.
+export function listFiles(p = paths()) {
+  let names = [];
+  try { names = fs.readdirSync(p.files).filter((f) => /^[0-9a-f]{32}\.json$/.test(f)); } catch { return []; }
+  return names.map((f) => readJson(path.join(p.files, f), null))
+    .filter((m) => m && typeof m.token === "string" && /^[0-9a-f]{32}$/.test(m.token))
+    .sort((a, b) => a.created_at - b.created_at);
+}
+
+// The metadata first: once it is gone the inbox answers 404, whatever is left on disk.
+export function removeFile(p, token) {
+  if (!/^[0-9a-f]{32}$/.test(String(token))) return false;
+  const meta = path.join(p.files, `${token}.json`);
+  const had = fs.existsSync(meta) || fs.existsSync(path.join(p.files, token));
+  fs.rmSync(meta, { force: true });
+  fs.rmSync(path.join(p.files, token), { recursive: true, force: true });
+  return had;
+}
+
+// Expired files, and anything a crashed copy left without metadata (after an hour, so a copy
+// still running is never cut short). -> the tokens removed.
+export function sweepFiles(p, now = Date.now()) {
+  const gone = [];
+  for (const m of listFiles(p)) if (!(m.expires_at > now)) { removeFile(p, m.token); gone.push(m.token); }
+  let entries = [];
+  try { entries = fs.readdirSync(p.files); } catch { return gone; }
+  for (const e of entries) {
+    if (!/^[0-9a-f]{32}$/.test(e) || fs.existsSync(path.join(p.files, `${e}.json`))) continue;
+    try { if (now - fs.statSync(path.join(p.files, e)).mtimeMs > 3600 * 1000) { removeFile(p, e); gone.push(e); } } catch { /* raced */ }
+  }
+  return gone;
 }

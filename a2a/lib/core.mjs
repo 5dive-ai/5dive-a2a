@@ -13,6 +13,12 @@ export const DEFAULT_TTL_MS = 24 * 3600 * 1000;
 export const MAX_TTL_MS = 7 * 24 * 3600 * 1000;
 export const MAX_SKEW_MS = 10 * 60 * 1000;
 export const CONTENT_TYPE = "application/openagent-msg+json";
+// DIVE-5071: a file travels as a link to the SENDER's own box; the signed message carries its
+// url, size, sha256 and expiry, so the receiver can check what it downloaded is what was sent.
+export const MAX_FILES = 8;
+export const FILE_TOKEN_RE = /^[0-9a-f]{32}$/;
+export const FILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const FILE_URL_RE = /^https?:\/\/[A-Za-z0-9.:[\]-]+\/openagent\/files\/([0-9a-f]{32})\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/;
 
 // ---- base58btc and did:key --------------------------------------------------
 
@@ -163,8 +169,43 @@ export function envelopeShapeError(env) {
   if (env.thread !== undefined && (typeof env.thread !== "string" || !ID_RE.test(env.thread))) return "thread";
   if (env.ref !== undefined && (typeof env.ref !== "string" || env.ref.length > 256)) return "ref";
   if (typeof env.body !== "string" || Buffer.byteLength(env.body, "utf8") > MAX_BODY_BYTES) return "body";
+  if (env.files !== undefined && (!Array.isArray(env.files) || env.files.length < 1 || env.files.length > MAX_FILES || !env.files.every((f) => !fileShapeError(f)))) return "files";
   if (typeof env.sig !== "string" || env.sig.length > 200) return "sig";
   return null;
+}
+
+// One entry of `files`: every field the receiver renders into an agent's text is pinned to a
+// character set that cannot break out of a shell word or the delivery's line structure.
+export function fileShapeError(f) {
+  if (!f || typeof f !== "object" || Array.isArray(f)) return "not-an-object";
+  if (typeof f.name !== "string" || !FILE_NAME_RE.test(f.name)) return "name";
+  const m = typeof f.url === "string" ? FILE_URL_RE.exec(f.url) : null;
+  if (!m || m[2] !== f.name) return "url";
+  if (!Number.isSafeInteger(f.size) || f.size < 0) return "size";
+  if (typeof f.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(f.sha256)) return "sha256";
+  if (Number.isNaN(isoMs(f.expires))) return "expires";
+  return null;
+}
+
+// A path's last component as a name the URL, the disk and a shell all take as-is.
+export function safeFileName(p) {
+  const base = String(p).split("/").filter(Boolean).pop() || "";
+  let n = base.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+/, "").slice(0, 128);
+  return FILE_NAME_RE.test(n) ? n : "file";
+}
+
+// "90s", "30m", "24h", "7d" (or bare ms) -> ms, or NaN.
+export function parseDuration(s) {
+  const m = /^(\d+)(ms|s|m|h|d)?$/.exec(String(s).trim());
+  if (!m) return NaN;
+  return Number(m[1]) * { ms: 1, s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 }[m[2] || "ms"];
+}
+
+// "100M", "1G", "512KiB", "2048" -> bytes, or NaN.
+export function parseSize(s) {
+  const m = /^(\d+)\s*(?:([KMG])(?:i?B)?|B)?$/i.exec(String(s).trim());
+  if (!m) return NaN;
+  return Number(m[1]) * ({ K: 1024, M: 1024 ** 2, G: 1024 ** 3 }[(m[2] || "").toUpperCase()] || 1);
 }
 
 // The effective expiry: `expires` if given, else at + 24h, and never more than
@@ -195,8 +236,9 @@ export function ulid(nowMs = Date.now()) {
   return time + r;
 }
 
-export function makeEnvelope({ from, to, body, at, expires, thread, ref, id }) {
+export function makeEnvelope({ from, to, body, at, expires, thread, ref, id, files }) {
   const env = { openagent_msg: MSG_VERSION, id: id || ulid(), from, to: Array.isArray(to) ? to : [to], at, body };
+  if (files && files.length) env.files = files;
   if (expires) env.expires = expires;
   if (thread) env.thread = thread;
   if (ref) env.ref = ref;

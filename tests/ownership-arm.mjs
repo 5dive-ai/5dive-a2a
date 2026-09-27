@@ -81,6 +81,39 @@ try {
   arm(s3 === 202 && spooled() === 2, "stored again after the heal, with no inbox restart", `status ${s3}, spooled ${spooled()}`);
   const ev = fs.readFileSync(p.events, "utf8");
   arm(/"inbox-cannot-read"/.test(ev), "events.log carries inbox-cannot-read for the owner");
+
+  // 4. DIVE-5071: a sent file is READ as the calling seat (here `nobody`), never as root, and the
+  // copy is served by the non-root inbox. Root reading the path would let any seat mail out
+  // /etc/shadow or this box's own signing key.
+  const seat = { kind: "seat", agent: "main", user: "nobody" };
+  const cfg = state.loadConfig(p);
+  const opts = { now: Date.now(), ttl: 3600e3, id: core.ulid(), to: "luca@b.example.com" };
+  const readable = path.join(path.dirname(LIB), "readable.bin");
+  fs.writeFileSync(readable, "a file the seat can read\n", { mode: 0o644 });
+  const secret = path.join(path.dirname(LIB), "root-only.bin");
+  fs.writeFileSync(secret, "root only\n", { mode: 0o600 });
+  const refused = async (src) => { try { await cli.stageFile(p, cfg, seat, src, opts); return ""; } catch (e) { return String(e.message); } };
+  for (const src of ["/etc/shadow", path.join(p.keys, "main.key"), secret]) {
+    const why = await refused(src);
+    arm(/Permission denied/.test(why), `a seat cannot send ${src === secret ? "a root-only 0600 file" : src} (read as the seat, not root)`, why || "it was staged");
+  }
+  let why = "";
+  try { cli.readMessageFile(seat, path.join(p.keys, "main.key")); } catch (e) { why = String(e.message); }
+  arm(/Permission denied/.test(why), "a seat cannot send the signing key as --message-file", why || "it was read");
+  let text = "";
+  try { text = cli.readMessageFile(seat, readable); } catch (e) { text = String(e.message); }
+  arm(text === "a file the seat can read\n", "--message-file still reads what the seat can read", text);
+  const staged = state.listFiles(p);
+  arm(staged.length === 0, "a refused file leaves nothing behind", `${staged.length} staged`);
+  let f = null;
+  try { f = await cli.stageFile(p, cfg, seat, readable, opts); } catch (e) { arm(false, "a seat sends a file it can read", e.message); }
+  if (f) {
+    const disk = path.join(p.files, f.token, f.name);
+    const st = fs.statSync(disk);
+    arm(st.uid === Number(spawnSync("id", ["-u", SVC], { encoding: "utf8" }).stdout.trim()) && (st.mode & 0o777) === 0o640, `the copy is ${SVC}-owned 0640`, desc(disk));
+    const res = await fetch(`http://127.0.0.1:${port}/openagent/files/${f.token}/${f.name}`).then(async (x) => ({ status: x.status, body: await x.text() }), () => ({ status: 0 }));
+    arm(res.status === 200 && res.body === "a file the seat can read\n", `the non-root inbox serves it`, `status ${res.status}`);
+  }
 } finally { inbox.kill(); }
 
 console.log(failed ? `${failed} arm(s) failed` : "all arms pass");

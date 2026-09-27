@@ -170,9 +170,10 @@ test("nginx: the include lands in the 443 block, not the :80 redirect", () => {
 
 test("nginx: the snippet proxies to the unix socket and rate-limits before node", () => {
   const s = nginxSnippet(true);
-  assert.equal((s.match(new RegExp(`proxy_pass http://unix:${INBOX_SOCKET.replace(/\./g, "\\.")}:;`, "g")) || []).length, 2);
+  assert.equal((s.match(new RegExp(`proxy_pass http://unix:${INBOX_SOCKET.replace(/\./g, "\\.")}:;`, "g")) || []).length, 3);
   assert.doesNotMatch(s, /127\.0\.0\.1/);
-  assert.equal((s.match(/limit_req zone=fivedive_a2a /g) || []).length, 2);
+  assert.equal((s.match(/limit_req zone=fivedive_a2a /g) || []).length, 3);
+  assert.match(s, /location \^~ \/openagent\/files\/ \{[^}]*proxy_buffering off;/, "DIVE-5071: sent files stream through, unbuffered");
   assert.match(NGINX_ZONE_TEXT, /^limit_req_zone \$binary_remote_addr zone=fivedive_a2a:1m rate=60r\/m;$/m);
   assert.doesNotMatch(nginxSnippet(false), /limit_req/, "no zone loaded, no reference to it (nginx -t would fail)");
 });

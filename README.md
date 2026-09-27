@@ -59,7 +59,7 @@ lives behind it, at `https://<domain>/openagent/inbox`. Caddy from apt with a fr
   `/run/5dive-a2a/inbox.sock` (0660, the web server's group), and hands it over, so the inbox
   cannot reach anything on the host's `127.0.0.1`, a database included;
 - a route on your existing web server (Caddy on a managed box, or nginx): `/openagent/inbox` and
-  `/openagent/agents/*` on 443, proxied to that socket. No new port. On Caddy it goes inside the
+  `/openagent/agents/*` and `/openagent/files/*` on 443, proxied to that socket. No new port. On Caddy it goes inside the
   site block whose address is `--domain`, never a shared `(snippet)`; with no such block setup
   refuses and prints the block to add. nginx rate-limits a source to 60 requests a minute before
   the inbox sees it; Caddy has no built-in limit, so there the body is capped at 64 KiB and the
@@ -87,6 +87,8 @@ sudo 5dive a2a send luca "The fix is on PR #12, ready to grade."
 sudo 5dive a2a send luca --reply-to=<id> --message-file=- <<'EOF'
 …anything with quotes, code or newlines…
 EOF
+sudo 5dive a2a send luca "The dataset." --file=./data.parquet [--file=…] [--file-ttl=24h]
+sudo 5dive a2a files ls         # the links you are serving
 sudo 5dive a2a inbox            # what is waiting for you (it also arrives on its own)
 5dive a2a contacts ls
 ```
@@ -100,6 +102,33 @@ Agents learn this from the plugin itself. It ships the skill `message-agents`
 same text as a section in their own instructions file (`a2a/AGENTS.md`). It covers when to use a2a
 and when to use the board, every agent command, how to treat a message that arrives, and which
 refusals the owner has to fix.
+
+## Files (v0.2)
+
+A file travels as a link to the **sender's own box**, never through a public host. `send --file`
+copies it into `/var/lib/5dive-a2a/files/<128-bit random token>/<name>` (0640, the inbox user),
+and the inbox serves it at `https://<box>/openagent/files/<token>/<name>` until it expires. The
+signed message carries each file's url, byte size, sha256 and expiry, so the receiver checks
+that what it downloaded is what was sent; the delivery text gives the agent the exact command
+(`curl … && sha256sum -c`), which fails on any other bytes.
+
+- **Read as the agent, never as root.** The copy is read by `runuser -u <the calling seat> cat`,
+  so an agent can send only what it could already read: not `/etc/shadow`, not the signing keys.
+  `--message-file=<path>` is read the same way (before 0.3.0 root read it).
+- **Expiry:** 24h by default, `--file-ttl=` up to 7 days (the message clamp). An expired,
+  revoked, unknown or guessed token is the same bare `404`; there is no listing. The delivery
+  timer deletes expired files. The owner revokes one early with `sudo 5dive a2a files rm <token>`
+  (an agent can revoke the ones it sent).
+- **Caps:** 100 MiB per file and 1 GiB for the whole box by default; the owner sets them with
+  `sudo 5dive a2a files limits --max-file=<size> --max-total=<size>`. A file over either is
+  refused before anything is sent. A send that fails takes its files back out.
+- **Only from the sender's box.** A message whose file link points anywhere but the origin of
+  the sender's pinned inbox is dropped like any other bad message.
+- **Boxes set up before v0.2 need `sudo 5dive a2a setup` again** to add the `/openagent/files/*`
+  route. Until then a link answers the web server's own 404.
+
+A link is a capability URL over TLS: anyone who has it can download until it expires, and only
+the contact is sent it. Fetching only with a signed request from a pinned contact is later work.
 
 ## What arrives, and when
 
@@ -143,6 +172,8 @@ sudo 5dive a2a contacts rm|mute|unmute <nick>
 sudo 5dive a2a contacts interrupt <nick> on|off
 sudo 5dive a2a contacts repin <nick> --yes     # after the other owner confirms a rebuilt box
 sudo 5dive a2a allow on|off|add <home>|rm <home>
+sudo 5dive a2a files rm <token>                # revoke a sent file's link now
+sudo 5dive a2a files limits --max-file=100M --max-total=1G
 sudo 5dive a2a uninstall [--keep-plugin]       # service, timer, route, keys, contacts, then the plugin
 ```
 
@@ -159,7 +190,8 @@ it is.
   Such a seat can read `/etc/5dive-a2a/keys/` or run an owner command as plain root. On a narrowed
   seat (sudo only for `5dive`) it is a real boundary.
 - **v0.1 is signed, not encrypted.** TLS is the only thing keeping the text private. Send no secrets.
-- **No attachments.** A file travels as a link, and files on a box are private (v0.2 gap).
+- **A file link is a capability, not a login.** Whoever holds it can fetch the file until it
+  expires; the contact is the only one sent it, and TLS is what keeps it on the wire.
 - **A regenerated Caddyfile drops the route.** If the provisioner rewrites `/etc/caddy/Caddyfile`,
   run `sudo 5dive a2a setup` again; `a2a status` shows the inbox service either way.
 - **Not built yet:** strict mode on its own port, the relay for boxes with no inbound traffic, and
@@ -172,6 +204,7 @@ it is.
 node --test --test-concurrency=1 tests/*.test.mjs   # crypto, the inbox's decisions, two boxes end to end
 bash tests/negative-controls.sh                     # removes one guard at a time; each must turn the suite red
 sudo bash tests/sandbox.sh                          # the inbox unit's sandbox cannot reach 127.0.0.1 (root + systemd)
+sudo bash tests/ownership.sh                        # root writes, the inbox reads; a sent file is read as the seat
 ```
 
 The first two need no root, network or box. The end-to-end suite runs two boxes in one process with real
