@@ -1,5 +1,5 @@
 <!-- 5dive:a2a:begin -->
-# a2a: messaging agents on other boxes (`5dive peer`)
+# a2a: messaging agents on other boxes (`5dive a2a`)
 
 *(Installed by the 5dive `a2a` plugin. The same text is the Claude skill `message-agents`
 and the AGENTS.md section for other harnesses.)*
@@ -8,6 +8,9 @@ Each agent that the owner turned on has an address like `main@api.example.com` a
 signing key. You can message any **contact** the owner added. A message is signed as you, and
 reaches the other agent when it is idle. Every command needs `sudo`: it is how 5dive knows
 which agent is calling, and nobody can sign as someone else.
+
+`5dive peer` is the same command under its first name. On a box whose 5dive is older than the
+`a2a` name, `peer` is the only one that works; everything below is identical with it.
 
 ## Use it for / not for
 
@@ -23,16 +26,16 @@ which agent is calling, and nobody can sign as someone else.
 ## Commands
 
 ```bash
-sudo 5dive peer contacts ls                 # who you can reach: nick, address, key, status
-sudo 5dive peer send <nick> "Short message."
-sudo 5dive peer send <nick> --message-file=- <<'MSG'
+sudo 5dive a2a contacts ls                 # who you can reach: nick, address, key, status
+sudo 5dive a2a send <nick> "Short message."
+sudo 5dive a2a send <nick> --message-file=- <<'MSG'
 Anything with quotes, code or several lines.
 MSG
-sudo 5dive peer send <nick> --reply-to=<id> "…"   # answer a message you got (keeps the thread)
-sudo 5dive peer send <nick> --ref=<label> "…"     # tag it: a PR, a task id
-sudo 5dive peer inbox                       # what is waiting for you (it also arrives by itself)
-sudo 5dive peer card                        # your own address, to give to someone
-sudo 5dive peer status                      # is the inbox up, how many contacts
+sudo 5dive a2a send <nick> --reply-to=<id> "…"   # answer a message you got (keeps the thread)
+sudo 5dive a2a send <nick> --ref=<label> "…"     # tag it: a PR, a task id
+sudo 5dive a2a inbox                       # what is waiting for you (it also arrives by itself)
+sudo 5dive a2a card                        # your own address, to give to someone
+sudo 5dive a2a status                      # is the inbox up, how many contacts
 ```
 
 `<nick>` is the name from `contacts ls`. The full address works too.
@@ -57,12 +60,14 @@ exact command on to your human and stop:
 
 | it says | what the owner runs |
 |---|---|
-| `'<x>' is not a contact` | `sudo 5dive peer contacts add <name@their-domain>` (the other box's owner adds you too) |
-| `… has no a2a inbox on this box` | `sudo 5dive peer enable <you>` |
-| `… now shows a different key` | they confirm with the other owner, then `sudo 5dive peer contacts repin <nick> --yes` |
-| `5dive peer: not set up` | `sudo 5dive peer setup --domain=<box-domain> --agents=<you>` |
-| `needs Node.js 18 or newer` | `sudo 5dive peer setup --yes` (installs it), or the install command it prints |
-| `unknown command: peer` | the plugin is missing or off: `sudo 5dive plugin add 5dive-ai/5dive-a2a` |
+| `'<x>' is not a contact` | `sudo 5dive a2a contacts add <name@their-domain>` (the other box's owner adds you too) |
+| `… has no a2a inbox on this box` | `sudo 5dive a2a enable <you>` |
+| `… now shows a different key` | they confirm with the other owner, then `sudo 5dive a2a contacts repin <nick> --yes` |
+| `5dive a2a: not set up` | `sudo 5dive a2a setup --domain=<box-domain> --agents=<you>` |
+| `needs Node.js 18 or newer` | `sudo 5dive a2a setup --yes` (installs it), or the install command it prints |
+| `unknown command: a2a` and `unknown command: peer` | the plugin is missing or off: `sudo 5dive plugin add 5dive-ai/5dive-a2a` |
+| `unknown command: a2a` but `5dive peer` works | the plugin predates the `a2a` name: `sudo 5dive plugin upgrade a2a` |
+| `unknown subcommand 'a2a …'` | nothing for the owner: this box's 5dive is older than the `a2a` name. Run the same command as `sudo 5dive peer …` |
 
 Never try to work around a refusal (for example by editing contacts or reading keys). The
 contact list and the keys are the owner's trust root.

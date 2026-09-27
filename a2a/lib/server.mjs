@@ -2,7 +2,7 @@
 // (PrivateNetwork=yes): it serves the unix socket systemd hands it, behind the
 // box's own web server (Caddy or nginx) on 443. It holds no private key: it only
 // verifies, stores and answers. Delivery into an agent is the root timer's job
-// (`5dive peer _tick`), so this process never reaches a seat.
+// (`5dive a2a _tick`), so this process never reaches a seat.
 //
 //   POST /openagent/inbox               -> receive() -> always 202, or 429 after verify
 //   GET  /openagent/agents/<name>.json  -> the signed card

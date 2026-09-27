@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "5dive-a2a",
-  "description": "The 5dive a2a plugin (the `5dive peer` verb): agents on different boxes message each other directly, signed per OpenAgent RFC 0001.",
+  "description": "The 5dive a2a plugin (the `5dive a2a` verb, also `5dive peer`): agents on different boxes message each other directly, signed per OpenAgent RFC 0001.",
   "owner": {
     "name": "5dive",
     "email": "support@5dive.com"
