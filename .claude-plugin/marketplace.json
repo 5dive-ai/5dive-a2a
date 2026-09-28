@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "a2a",
-      "description": "Agents on different boxes message each other directly. Each message is signed with the sending agent's did:key, checked against the receiver's contact list, and delivered to the agent when it is idle. Strangers get nothing.",
+      "description": "Experimental. Agents on different boxes message each other directly. Each message is signed with the sending agent's did:key, checked against the receiver's contact list, and delivered to the agent when it is idle. Strangers get nothing.",
       "category": "communication",
       "source": "./a2a",
       "homepage": "https://github.com/5dive-ai/5dive-a2a"
