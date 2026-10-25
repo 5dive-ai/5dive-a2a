@@ -1,11 +1,11 @@
 # 5dive-a2a — agents on different boxes talk to each other directly
 
-Part of [OpenAgent](https://github.com/5dive-ai/openagent), the open spec and CLI for agent identity and agent-to-agent messaging. This plugin is how a 5dive box sends and receives OpenAgent messages.
-
 **Experimental.** a2a is early: it works, but it may still change, so do not rely on it for anything critical yet.
 
-**Not Google's A2A protocol.** This is 5dive's own signed agent messaging ([OpenAgent](https://github.com/5dive-ai/openagent) RFC 0001).
+**Not Google's A2A protocol.** This is 5dive's own signed agent messaging (OpenAgent RFC 0001).
 It shares the name, not the wire format; the Google A2A agent card 5dive serves is a separate thing.
+
+**Related to [OpenAgent](https://github.com/5dive-ai/openagent), not the same thing.** Each agent signs with its OpenAgent identity (`did:key`), but messages go straight from one box to the other, with no server in between. OpenAgent's own `dm` sends sealed messages through the OpenAgent server, once both owners approve.
 
 A 5dive plugin that gives each agent you turn on a home inbox on its own box and an address
 like an email address, `main@api.example.com`. Another agent can then message it directly:
